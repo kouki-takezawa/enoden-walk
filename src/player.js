@@ -6,9 +6,9 @@ const smooth = (e0, e1, x) => {
   return t * t * (3 - 2 * t);
 };
 
-export const SPEED = { walk: 1.25, run: 2.9, sprint: 6.0 };            // m/s = design speeds of the baked cycles
+export const SPEED = { walk: 1.25, run: 2.9, sprint: 6.0 }; // m/s = design speeds of the baked cycles
 const NOMINAL = { walk: 32 / 30, run: 22 / 30, sprint: 15 / 30, idle: 4.0 };
-const STRIDE = { walk: 1.25 * NOMINAL.walk, run: 2.9 * NOMINAL.run, sprint: 6.0 * NOMINAL.sprint };
+const STRIDE = { walk: SPEED.walk * NOMINAL.walk, run: SPEED.run * NOMINAL.run, sprint: SPEED.sprint * NOMINAL.sprint };
 const JUMP_HEIGHT = 0.42;
 
 /** The Blender-baked man: cross-faded idle / walk / run / sprint cycles driven by the ground speed, plus a jump. */
@@ -18,6 +18,7 @@ export class Player {
     this.root = new THREE.Group();
     this.model = gltf.scene;
     this.model.traverse((o) => {
+      if (o.name.startsWith('Rig')) o.position.set(0, 0, 0); // the armature object carries the offset it had in the Blender scene: stand on the origin
       if (o.isMesh || o.isSkinnedMesh) {
         o.castShadow = true;
         o.receiveShadow = true;
@@ -31,10 +32,12 @@ export class Player {
     this.phase = 0;
     this.idleT = 0;
     this.jumpT = null;
-    this.vel = new THREE.Vector3();
     this.lastDir = new THREE.Vector2(0, -1);
     this.groundY = ground.height(spawn.x, spawn.z);
     this.pos.y = this.groundY;
+    this.riding = false;
+    this.onStep = null; // (surfaceId, speed) => void
+    this.lastStepHalf = 0;
 
     this.mixer = new THREE.AnimationMixer(this.model);
     this.act = {};
@@ -52,11 +55,16 @@ export class Player {
   }
 
   jump() {
-    if (this.jumpT === null) this.jumpT = 0;
+    if (this.jumpT === null && !this.riding) this.jumpT = 0;
   }
 
-  /** input: {x, y} in [-1,1] (right / forward), run, sprint.  camYaw: camera azimuth.  gate(x, z): true when the position is closed off. */
+  /** input: {x, y, run, sprint}; camYaw: camera azimuth; gate(nx, nz, ox, oz): true when the step is closed off */
   update(dt, input, camYaw, gate) {
+    if (this.riding) {
+      this.speed = 0;
+      this.pose(dt, 0, 0);
+      return;
+    }
     const mag = Math.min(1, Math.hypot(input.x, input.y));
     let target = 0;
     if (mag > 0.08) target = (input.sprint ? SPEED.sprint : input.run ? SPEED.run : SPEED.walk) * (input.run || input.sprint ? 1 : Math.max(0.55, mag));
@@ -66,10 +74,8 @@ export class Player {
     if (mag > 0.08) {
       const fx = -Math.sin(camYaw);
       const fz = -Math.cos(camYaw);
-      const rx = -fz;
-      const rz = fx;
-      const dx = fx * input.y + rx * input.x;
-      const dz = fz * input.y + rz * input.x;
+      const dx = fx * input.y - fz * input.x;
+      const dz = fz * input.y + fx * input.x;
       const l = Math.hypot(dx, dz) || 1;
       this.lastDir.set(dx / l, dz / l);
       const ty = Math.atan2(this.lastDir.x, this.lastDir.y);
@@ -78,16 +84,19 @@ export class Player {
       this.yaw += clamp(d, -12 * dt, 12 * dt);
     }
 
-    // ---- move with wall / slope / gate checks (axis-separated sliding)
+    // ---- move with wall / fence / slope / gate checks (axis-separated sliding)
     if (this.speed > 0.02) {
       const step = this.speed * dt;
       const mx = this.lastDir.x * step;
       const mz = this.lastDir.y * step;
+      const g = this.ground;
+      const stuck = g.isSolid(this.pos.x, this.pos.z);
       const tryMove = (nx, nz) => {
-        const h1 = this.ground.height(nx, nz);
+        const h1 = g.height(nx, nz);
         if (!(h1 === h1) || h1 < -2.3) return false;
+        if (!stuck && g.isSolid(nx, nz)) return false;
         const dist = Math.hypot(nx - this.pos.x, nz - this.pos.z) || 1e-6;
-        if ((h1 - this.groundY) / dist > 1.15 && this.jumpT === null) return false;      // too steep to climb
+        if ((h1 - this.groundY) / dist > 1.15 && this.jumpT === null) return false; // too steep to climb
         if (gate && gate(nx, nz, this.pos.x, this.pos.z)) return false;
         this.pos.x = nx;
         this.pos.z = nz;
@@ -116,13 +125,23 @@ export class Player {
       if (t >= this.jumpDur - 0.02) this.jumpT = null;
     }
     this.pos.y = this.groundY + jumpLift;
+    this.pose(dt, this.speed, wj);
+  }
 
-    // ---- animation
+  /** cross-fade the baked cycles; also fires the footstep callback */
+  pose(dt, s, wj) {
     this.idleT = (this.idleT + dt) % NOMINAL.idle;
-    const s = this.speed;
     if (s > 0.03) {
       const stride = s <= SPEED.walk ? STRIDE.walk : s <= SPEED.run ? STRIDE.walk + (STRIDE.run - STRIDE.walk) * ((s - SPEED.walk) / (SPEED.run - SPEED.walk)) : STRIDE.run + (STRIDE.sprint - STRIDE.run) * clamp((s - SPEED.run) / (SPEED.sprint - SPEED.run), 0, 1);
+      const prev = this.phase;
       this.phase = (this.phase + (dt * s) / stride) % 1;
+      // a foot lands at phase 0 (left) and 0.5 (right)
+      const half = Math.floor(this.phase * 2);
+      if (half !== this.lastStepHalf && this.jumpT === null) {
+        this.lastStepHalf = half;
+        if (this.onStep) this.onStep(this.ground.surface(this.pos.x, this.pos.z), s);
+      }
+      void prev;
     }
     const w = { idle: 0, walk: 0, run: 0, sprint: 0 };
     if (s < 0.03) w.idle = 1;
@@ -158,10 +177,12 @@ export class Player {
   }
 
   teleport(x, z, yaw) {
-    this.pos.set(x, this.ground.height(x, z), z);
+    const h = this.ground.height(x, z);
+    this.pos.set(x, h === h ? h : this.pos.y, z);
     this.groundY = this.pos.y;
     if (yaw !== undefined) this.yaw = yaw;
     this.speed = 0;
     this.jumpT = null;
+    this.riding = false;
   }
 }

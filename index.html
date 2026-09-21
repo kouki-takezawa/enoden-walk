@@ -4,43 +4,60 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <title>江ノ電 鎌倉高校前 散歩</title>
-  <meta name="description" content="江ノ電 鎌倉高校前駅・1号踏切の周辺を、人物を操作して歩き回れる3Dウェブアプリ。地形・建物は国土交通省 PLATEAU をもとに生成。" />
+  <meta name="description" content="江ノ電 鎌倉高校前駅・1号踏切の周辺を、人物を操作して歩き回れる3Dウェブアプリ。電車に乗る・夜の景色・写真モード。地形・建物は国土交通省 PLATEAU をもとに生成。" />
   <meta name="theme-color" content="#f0b98a" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="江ノ電 鎌倉高校前 散歩" />
+  <meta property="og:description" content="夕暮れの1号踏切と相模湾の見える丘の街を、人物を操作して歩こう。電車に乗る・夜の景色・写真モード。" />
+  <meta property="og:image" content="https://enoden-walk.vercel.app/og.jpg" />
+  <meta property="og:url" content="https://enoden-walk.vercel.app/" />
+  <meta name="twitter:card" content="summary_large_image" />
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body>
-  <canvas id="c"></canvas>
+  <canvas id="c" tabindex="-1"></canvas>
 
-  <div id="loading" class="panel center">
-    <h1>江ノ電 鎌倉高校前 散歩</h1>
-    <p class="sub">夕暮れの1号踏切と、相模湾の見える丘の街を歩こう</p>
+  <div id="loading" class="panel center" role="dialog" aria-labelledby="ttl">
+    <div class="langsw"><button data-lang="ja">JA</button><button data-lang="en">EN</button></div>
+    <h1 id="ttl" data-i18n="title">江ノ電 鎌倉高校前 散歩</h1>
+    <p class="sub" data-i18n="subtitle">夕暮れの1号踏切と、相模湾の見える丘の街を歩こう</p>
     <div class="bar"><div id="barfill"></div></div>
-    <p id="loadtext">読み込み中…</p>
-    <button id="start" disabled>散歩をはじめる</button>
-    <div class="keys">
-      <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / <kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd> 移動</div>
-      <div><kbd>Shift</kbd> 走る　<kbd>R</kbd> 全力　<kbd>Space</kbd> ジャンプ</div>
-      <div>ドラッグ 視点　ホイール ズーム　<kbd>M</kbd> 音</div>
-      <div class="dim">スマホ: 左の丸で移動、右をドラッグで視点</div>
-    </div>
-    <p class="credit">地形・建物: 国土交通省 Project PLATEAU（CC BY 4.0）／ 道路・線路: © OpenStreetMap contributors（ODbL）<br />
-      3Dモデル（風景・電車・人物）は Blender で手続き生成した非公式の創作物です。</p>
+    <p id="loadtext" data-i18n="loading">読み込み中…</p>
+    <button id="start" disabled data-i18n="start">散歩をはじめる</button>
+    <div id="helpbody" class="keys"></div>
+    <p class="credit" data-i18n-html="credit"></p>
   </div>
 
   <div id="hud" class="hidden">
-    <div id="where">1号踏切 付近</div>
-    <div id="msg"></div>
-    <div id="help">WASD 移動 ・ Shift 走る ・ R 全力 ・ Space ジャンプ ・ ドラッグ 視点 ・ M 音</div>
+    <div id="where"></div>
+    <div id="toolbar">
+      <button id="bTime" aria-label="time of day">🌇</button>
+      <button id="bSpots" aria-label="spots">📍</button>
+      <button id="bPhoto" aria-label="photo mode">📷</button>
+      <button id="bSet" aria-label="settings">⚙</button>
+      <button id="bHelp" aria-label="help">？</button>
+    </div>
+    <div id="msg" role="status" aria-live="polite"></div>
+    <div id="prompt" class="hidden"></div>
+    <div id="trainbox"><span id="trainicon">🚃</span><span id="traintext"></span></div>
+    <div id="mapwrap"><canvas id="map" width="176" height="176"></canvas><span id="mapN">N</span></div>
+    <div id="fps" class="hidden"></div>
+    <div id="help" data-i18n="helpShort">WASD 移動 ・ Shift 走る ・ Space ジャンプ ・ E 乗る ・ ？ ガイド</div>
   </div>
 
   <div id="touch" class="hidden">
     <div id="stick"><div id="knob"></div></div>
     <div id="btns">
+      <button id="bBoard" class="hidden">🚃</button>
       <button id="bRun">走る</button>
       <button id="bJump">ジャンプ</button>
     </div>
   </div>
+
+  <div id="photo" class="hidden"></div>
+  <div id="modal" class="hidden"></div>
+  <div id="fade"></div>
 
   <script type="module" src="/src/main.js"></script>
 </body>

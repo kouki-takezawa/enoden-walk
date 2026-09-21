@@ -1,31 +1,117 @@
 import * as THREE from 'three';
-import { makeLoaders, sunDirection, makeSky, makeSea, makeTrees, makeEnvironment, tunePBR } from './world.js';
+import { PRESETS, loadSettings, saveSettings, autoPreset, makeT } from './config.js';
 import { Ground } from './ground.js';
-import { Player } from './player.js';
+import { Input } from './input.js';
+import { Player, SPEED } from './player.js';
 import { Train } from './train.js';
 import { Sound } from './audio.js';
+import { Renderer } from './render.js';
+import { makeSky, TimeOfDay, makeLampGlow } from './sky.js';
+import { makeSea } from './sea.js';
+import { makeTrees } from './trees.js';
+import { U } from './fx.js';
+import { UI } from './ui.js';
+import { makeLoaders, makeEnvironment, tunePBR, styleWorld } from './world.js';
 
 const BASE = import.meta.env.BASE_URL;
 const $ = (id) => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const ZERO = { x: 0, y: 0, run: false, sprint: false };
+const UP = new THREE.Vector3(0, 1, 0);
+const TIMES = ['day', 'dusk', 'night'];
+const isTouch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+
+// ---------------------------------------------------------------------------------------------------- settings
+const params = new URLSearchParams(location.search);
+const settings = loadSettings();
+if (params.has('lang')) settings.lang = params.get('lang') === 'en' ? 'en' : 'ja';
+if (params.has('q')) settings.quality = params.get('q');
+if (params.has('t')) settings.time = params.get('t');
+if (params.has('fps')) settings.fps = true;
+const t = makeT(() => settings.lang);
+const resolveLevel = () => (PRESETS[settings.quality] ? settings.quality : autoPreset());
+let level = resolveLevel();
+let preset = PRESETS[level];
+if (isTouch) document.body.classList.add('touch');
 
 // ---------------------------------------------------------------------------------------------------- renderer / scene
 const canvas = $('c');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.outputColorSpace = THREE.SRGBColorSpace;               // linear lighting -> sRGB display
-renderer.toneMapping = THREE.ACESFilmicToneMapping;               // filmic roll-off: no clipped highlights, richer colour
-renderer.toneMappingExposure = 1.15;
-renderer.shadowMap.enabled = true;                                // real-time shadows (sun + player-following shadow frustum)
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;                 // soft edges
-
+const renderer = new Renderer(canvas, preset, { govern: !params.has('nogov') });
+const gl = renderer.gl;
 const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0xe9c6a0, 0.00085);
-const camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 0.35, 150000);
+const camera = new THREE.PerspectiveCamera(58, innerWidth / innerHeight, 0.3, 150000);
+const hemi = new THREE.HemisphereLight(0xffffff, 0x888888, 0.6);
+const sunLight = new THREE.DirectionalLight(0xffffff, 3);
+sunLight.castShadow = true;
+sunLight.shadow.bias = -0.0006;
+sunLight.shadow.normalBias = 0.05;
+sunLight.shadow.camera.near = 1;
+sunLight.shadow.camera.far = 320;
+sunLight.shadow.autoUpdate = false; // refreshed only when something inside the box moved (see updateShadow)
+scene.add(hemi, sunLight, sunLight.target);
+const sky = makeSky(preset.clouds);
+scene.add(sky);
+const lampsPos = [];
+let pointLights = [];
+let envRT = null;
+function rebuildEnv() {
+  const rt = makeEnvironment(gl, sky);
+  scene.environment = rt.texture;
+  envRT?.dispose();
+  envRT = rt;
+}
+const tod = new TimeOfDay({ scene, renderer: gl, sky, sunLight, hemi, lampsPos, pointLights, glowPoints: null, onEnv: rebuildEnv });
+
+function applyShadow() {
+  const sh = sunLight.shadow;
+  sh.mapSize.set(preset.shadow, preset.shadow);
+  const r = preset.shadowRange;
+  const c = sh.camera;
+  c.left = c.bottom = -r;
+  c.right = c.top = r;
+  c.updateProjectionMatrix();
+  sh.map?.dispose();
+  sh.map = null;
+  shadowForce = true;
+}
+let shadowForce = true;
+applyShadow();
+
+// ---------------------------------------------------------------------------------------------------- state
+let meta;
+let ground;
+let player;
+let train;
+let worldRoot;
+let treesGroup;
+let treesData;
+let sea;
+let glow;
+let ui;
+let input;
+let ready = false;
+let started = false;
+let photo = false;
+let photoFov = 50;
+let wantShot = false;
+let modalOpen = false;
+const sound = new Sound();
+
+let camYaw = 0.61;
+let camPitch = 0.32;
+let camDist = 5.2;
+let camDistEff = 5.2;
+let rideYaw = Math.PI;
+let ridePitch = 0.05;
+let camSnap = true;
+const camPos = new THREE.Vector3();
+const camTarget = new THREE.Vector3();
+const tmpA = new THREE.Vector3();
+const tmpB = new THREE.Vector3();
 
 // ---------------------------------------------------------------------------------------------------- loading
-const SIZES = { meta: 0.002, ground: 0.5, trees: 0.1, world: 1.7, train: 0.05, character: 4.4 };
+const SIZES = { meta: 0.002, ground: 0.5, surface: 0.12, solid: 0.12, trees: 0.1, world: 4.1, train: 0.27, character: 0.85 };
 const TOTAL = Object.values(SIZES).reduce((a, b) => a + b, 0);
 const done = {};
 function progress(name, frac) {
@@ -37,8 +123,7 @@ async function fetchBuf(name, url) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${url}: ${res.status}`);
   const len = Number(res.headers.get('content-length')) || 0;
-  const enc = res.headers.get('content-encoding');
-  if (!res.body || !len || enc) {
+  if (!res.body || !len || res.headers.get('content-encoding')) {
     const b = await res.arrayBuffer();
     progress(name, 1);
     return b;
@@ -59,226 +144,282 @@ async function fetchBuf(name, url) {
     out.set(c, o);
     o += c.length;
   }
+  progress(name, 1);
   return out.buffer;
 }
 const gltfLoader = makeLoaders();
-const parse = (buf) => new Promise((ok, err) => gltfLoader.parse(buf, BASE + 'models/', ok, err));
-
-let meta;
-let ground;
-let player;
-let train;
-let sound;
-let sun;
-let sky;
-let sea;
-let worldRoot;
-let sunDir;
+const parse = (buf) => new Promise((ok, err) => gltfLoader.parse(buf, `${BASE}models/`, ok, err));
 
 async function load() {
-  meta = await (await fetch(BASE + 'models/meta.json')).json();
+  meta = await (await fetch(`${BASE}models/meta.json`)).json();
   progress('meta', 1);
-  const [gbuf, trees, wbuf, tbuf, cbuf] = await Promise.all([
-    fetchBuf('ground', BASE + 'models/ground.bin'),
-    fetch(BASE + 'models/trees.json').then((r) => r.json()).then((j) => (progress('trees', 1), j)),
-    fetchBuf('world', BASE + 'models/world.glb'),
-    fetchBuf('train', BASE + 'models/train.glb'),
-    fetchBuf('character', BASE + 'models/character.glb'),
+  const M = (f) => `${BASE}models/${f}`;
+  const [gbuf, sbuf, obuf, trees, wbuf, tbuf, cbuf] = await Promise.all([
+    fetchBuf('ground', M('ground.bin')),
+    fetchBuf('surface', M('surface.bin')),
+    fetchBuf('solid', M('solid.bin')),
+    fetch(M('trees.json')).then((r) => r.json()).then((j) => (progress('trees', 1), j)),
+    fetchBuf('world', M('world.glb')),
+    fetchBuf('train', M('train.glb')),
+    fetchBuf('character', M('character.glb')),
   ]);
-  $('loadtext').textContent = '街を組み立て中…';
+  $('loadtext').textContent = t('assembling');
   await new Promise((r) => setTimeout(r, 30));
-  ground = new Ground(meta.grid, gbuf);
+  treesData = trees;
+  ground = new Ground(meta.grid, gbuf, sbuf, obuf);
+  ground.addTrees(trees.trees);
   const [worldG, trainG, charG] = await Promise.all([parse(wbuf), parse(tbuf), parse(cbuf)]);
 
-  // lights, sky, sea
-  sunDir = sunDirection(meta);
-  scene.environment = makeEnvironment(renderer, sunDir);        // sky-based IBL: reflections + ambient gradient
-  scene.environmentIntensity = 0.55;
-  scene.add(new THREE.HemisphereLight(0xffe6cc, 0x8a7560, 0.6));
-  sun = new THREE.DirectionalLight(0xffd6a8, 3.4);
-  sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
-  const sc = sun.shadow.camera;
-  sc.left = -45;
-  sc.right = 45;
-  sc.top = 45;
-  sc.bottom = -45;
-  sc.near = 1;
-  sc.far = 320;
-  sun.shadow.bias = -0.0006;
-  sun.shadow.normalBias = 0.05;
-  scene.add(sun, sun.target);
-  sky = makeSky(sunDir);
-  scene.add(sky);
-  sea = makeSea(meta.sea_level);
+  worldRoot = worldG.scene;
+  tunePBR(worldRoot);
+  styleWorld(worldRoot, preset);
+  scene.add(worldRoot);
+  treesGroup = makeTrees(trees, preset);
+  scene.add(treesGroup);
+  sea = makeSea(ground, meta.sea_level, preset.seaDepth);
   scene.add(sea);
 
-  // static world
-  worldRoot = worldG.scene;
-  worldRoot.traverse((o) => {
-    if (!o.isMesh) return;
-    const far = o.name.includes('FarLand');
-    o.castShadow = !far;
-    o.receiveShadow = !far;
-    if (far) {                                   // distant headlands / Enoshima / Fuji: hazy blue silhouettes
-      o.material = new THREE.MeshBasicMaterial({ color: 0x8b98ad, fog: false });
-      return;
-    }
-    const mats = Array.isArray(o.material) ? o.material : [o.material];
-    for (const m of mats) if (m.transparent) m.depthWrite = false;
-  });
-  tunePBR(worldRoot);
-  scene.add(worldRoot);
-  scene.add(makeTrees(trees));
+  // street lamps + the fluorescent tubes under the platform canopy glow at night
+  lampsPos.push(...meta.lamps);
+  for (let k = 0; k < 10; k++) lampsPos.push([meta.platform.x0 + 2.25 + 4.5 * k, meta.platform.height + 2.35, -(meta.platform.y0 + meta.platform.y1) / 2]);
+  glow = makeLampGlow(lampsPos);
+  glow.visible = false;
+  scene.add(glow);
+  tod.glowPoints = glow;
+  buildPointLights();
 
   train = new Train(trainG, worldRoot, meta);
   scene.add(train.group);
-
   const sp = meta.spawn;
-  player = new Player(charG, ground, { x: sp.x, z: -sp.y, yaw: Math.atan2(-3.6, -5.2) });
+  player = new Player(charG, ground, { x: sp.x, z: -sp.y, yaw: Math.atan2(-sp.x, sp.y) });
+  player.onStep = (surf, speed) => sound.step(surf, speed);
   scene.add(player.root);
-  sound = new Sound();
-  $('loadtext').textContent = '準備できました';
+  camYaw = player.yaw + Math.PI;
+
+  ui.attach(meta, ground);
+  tod.set(settings.time, true);
+  ui.setTimeIcon(settings.time);
+  rebuildEnv();
+  try {
+    await gl.compileAsync(scene, camera);
+  } catch (e) {
+    console.warn('compileAsync', e);
+  }
+  $('loadtext').textContent = t('ready');
   $('start').disabled = false;
+  ready = true;
 }
 
-// ---------------------------------------------------------------------------------------------------- input
-const keys = {};
-const touch = { x: 0, y: 0, run: false };
-let camYaw = 0.61;
-let camPitch = 0.32;
-let camDist = 5.2;
-const camPos = new THREE.Vector3();
-let started = false;
-
-addEventListener('keydown', (e) => {
-  if (e.code === 'Space') e.preventDefault();
-  if (e.repeat) return;
-  keys[e.code] = true;
-  if (!started) return;
-  if (e.code === 'Space') player.jump();
-  if (e.code === 'KeyM' && sound) {
-    const m = sound.toggle();
-    showMsg(m ? '音: オフ' : '音: オン', 1200);
+function buildPointLights() {
+  for (const L of pointLights) scene.remove(L);
+  pointLights = [];
+  for (let i = 0; i < preset.pointLights; i++) {
+    const L = new THREE.PointLight(0xffc98a, 0, 24, 2);
+    scene.add(L);
+    pointLights.push(L);
   }
-});
-addEventListener('keyup', (e) => {
-  keys[e.code] = false;
-});
-addEventListener('blur', () => {
-  for (const k in keys) keys[k] = false;
-});
+  tod.pointLights = pointLights;
+}
 
-let drag = null;
-canvas.addEventListener('pointerdown', (e) => {
-  drag = { id: e.pointerId, x: e.clientX, y: e.clientY };
-  canvas.setPointerCapture(e.pointerId);
-});
-canvas.addEventListener('pointermove', (e) => {
-  if (!drag || drag.id !== e.pointerId) return;
-  camYaw -= (e.clientX - drag.x) * 0.0055;
-  camPitch = clamp(camPitch + (e.clientY - drag.y) * 0.0045, -0.12, 1.25);
-  drag.x = e.clientX;
-  drag.y = e.clientY;
-});
-const endDrag = (e) => {
-  if (drag && drag.id === e.pointerId) drag = null;
-};
-canvas.addEventListener('pointerup', endDrag);
-canvas.addEventListener('pointercancel', endDrag);
-canvas.addEventListener('wheel', (e) => {
-  camDist = clamp(camDist * (1 + e.deltaY * 0.0012), 2.2, 16);
-  e.preventDefault();
-}, { passive: false });
+function disposeGroup(g) {
+  g.traverse((o) => {
+    if (o.geometry) o.geometry.dispose();
+    if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => (m.map?.dispose(), m.dispose()));
+  });
+  g.removeFromParent();
+}
 
-// on-screen joystick / buttons
-const stick = $('stick');
-const knob = $('knob');
-let stickId = null;
-function stickMove(e) {
-  const r = stick.getBoundingClientRect();
-  let dx = e.clientX - (r.left + r.width / 2);
-  let dy = e.clientY - (r.top + r.height / 2);
-  const m = Math.hypot(dx, dy);
-  const lim = r.width * 0.42;
-  if (m > lim) {
-    dx = (dx / m) * lim;
-    dy = (dy / m) * lim;
+/** switch quality preset at run time (auto mode uses it to step down when the machine cannot keep up) */
+function applyQuality(name) {
+  level = name;
+  preset = PRESETS[name];
+  renderer.apply(preset);
+  applyShadow();
+  sky.material.defines.CLOUDS = preset.clouds ? 1 : 0;
+  sky.material.needsUpdate = true;
+  if (!ready) return;
+  styleWorld(worldRoot, preset);
+  disposeGroup(treesGroup);
+  treesGroup = makeTrees(treesData, preset);
+  scene.add(treesGroup);
+  disposeGroup(sea);
+  sea = makeSea(ground, meta.sea_level, preset.seaDepth);
+  scene.add(sea);
+  buildPointLights();
+}
+
+// ---------------------------------------------------------------------------------------------------- actions
+function isBlocked() {
+  return !started || modalOpen || photo;
+}
+
+function toggleBoard() {
+  if (isBlocked()) return;
+  if (player.riding) {
+    if (train.state !== 'dwell') return;
+    const seat = train.seat(tmpA);
+    const x = clamp(seat.x, meta.platform.x0 + 1.2, meta.platform.x1 - 1.2);
+    train.rider = false;
+    train.setFirstPerson(false);
+    player.teleport(x, -(meta.platform.y0 + meta.platform.y1) / 2, Math.PI);
+    player.root.visible = true;
+    camYaw = player.yaw + Math.PI;
+    camSnap = true;
+    ui.showMsg(t('alighted'), 2200);
+  } else if (train.canBoard(player.pos)) {
+    train.rider = true;
+    train.setFirstPerson(true);
+    train.timer = Math.max(train.timer, 6);
+    player.riding = true;
+    player.speed = 0;
+    player.root.visible = false;
+    rideYaw = Math.PI;
+    ridePitch = 0.05;
+    ui.showMsg(t('boarded'), 3200);
   }
-  knob.style.transform = `translate(${dx}px, ${dy}px)`;
-  touch.x = dx / lim;
-  touch.y = -dy / lim;
-}
-stick.addEventListener('pointerdown', (e) => {
-  stickId = e.pointerId;
-  stick.setPointerCapture(e.pointerId);
-  stickMove(e);
-});
-stick.addEventListener('pointermove', (e) => {
-  if (e.pointerId === stickId) stickMove(e);
-});
-const stickEnd = (e) => {
-  if (e.pointerId !== stickId) return;
-  stickId = null;
-  touch.x = touch.y = 0;
-  knob.style.transform = '';
-};
-stick.addEventListener('pointerup', stickEnd);
-stick.addEventListener('pointercancel', stickEnd);
-$('bJump').addEventListener('pointerdown', (e) => {
-  e.preventDefault();
-  if (started) player.jump();
-});
-$('bRun').addEventListener('pointerdown', (e) => {
-  e.preventDefault();
-  touch.run = !touch.run;
-  $('bRun').classList.toggle('on', touch.run);
-});
-
-function readInput() {
-  const x = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0) + touch.x;
-  const y = (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0) + touch.y;
-  return {
-    x: clamp(x, -1, 1),
-    y: clamp(y, -1, 1),
-    run: !!(keys.ShiftLeft || keys.ShiftRight) || touch.run,
-    sprint: !!keys.KeyR,
-  };
 }
 
-// ---------------------------------------------------------------------------------------------------- HUD
-let msgTimer = 0;
-function showMsg(text, ms = 2600) {
-  const el = $('msg');
-  el.textContent = text;
-  el.classList.add('show');
-  clearTimeout(msgTimer);
-  msgTimer = setTimeout(() => el.classList.remove('show'), ms);
-}
-let lastWhere = '';
-function updateWhere() {
-  let best = null;
-  let bd = 1e9;
-  for (const p of meta.poi) {
-    const d = Math.hypot(p.x - player.pos.x, -p.y - player.pos.z);
-    if (d < bd) {
-      bd = d;
-      best = p;
+function findWalkable(x, z) {
+  for (let r = 0; r <= 16; r += 1) {
+    for (let a = 0; a < (r === 0 ? 1 : 12); a++) {
+      const th = (a / 12) * Math.PI * 2 + r * 0.7;
+      const px = x + Math.cos(th) * r;
+      const pz = z + Math.sin(th) * r;
+      if (ground.walkable(px, pz) && !ground.isSolid(px, pz) && ground.surface(px, pz) > 0) return [px, pz];
     }
   }
-  const txt = best && bd < 90 ? `${best.name} 付近` : '鎌倉高校前 周辺';
-  if (txt !== lastWhere) {
-    $('where').textContent = txt;
-    lastWhere = txt;
+  return [meta.spawn.x, -meta.spawn.y];
+}
+
+function gotoSpot(p) {
+  ui.fade(() => {
+    if (player.riding) {
+      train.rider = false;
+      train.setFirstPerson(false);
+      player.riding = false;
+      player.root.visible = true;
+    }
+    const [x, z] = findWalkable(p.x, -p.y);
+    const yaw = Math.hypot(x, z) < 6 ? Math.atan2(-3.6, -5.2) : Math.atan2(-x, -z);
+    player.teleport(x, z, yaw);
+    camYaw = yaw + Math.PI;
+    camPitch = 0.32;
+    camSnap = true;
+    shadowForce = true;
+  });
+}
+
+function setTime(name) {
+  settings.time = name;
+  tod.set(name);
+  ui.setTimeIcon(name);
+  saveSettings(settings);
+  const sel = document.getElementById('sTime') || document.getElementById('pTime');
+  if (sel) sel.value = name;
+}
+
+function togglePhoto() {
+  if (!started || modalOpen) return;
+  if (!photo) {
+    photo = true;
+    photoFov = 50;
+    ui.enterPhoto({ fov: photoFov, time: settings.time });
+    document.exitPointerLock?.();
+  } else {
+    photo = false;
+    ui.exitPhoto(isTouch);
+    player.root.visible = !player.riding;
+    shadowForce = true;
   }
 }
 
-// ---------------------------------------------------------------------------------------------------- loop
-const clock = new THREE.Clock();
-let wasAlarm = false;
-const camTarget = new THREE.Vector3();
-const desired = new THREE.Vector3();
+function savePhoto() {
+  canvas.toBlob((blob) => {
+    if (!blob) return;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `enoden-walk-${Date.now()}.png`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    ui.showMsg(t('saved'), 1800);
+  }, 'image/png');
+}
 
+async function share() {
+  const data = { title: t('title'), text: t('subtitle'), url: `${location.origin}${location.pathname}` };
+  try {
+    if (navigator.share) await navigator.share(data);
+    else {
+      await navigator.clipboard.writeText(data.url);
+      ui.showMsg(t('copied'), 1800);
+    }
+  } catch {
+    /* cancelled */
+  }
+}
+
+const hooks = {
+  jump: () => !isBlocked() && player.jump(),
+  board: toggleBoard,
+  photo: togglePhoto,
+  mute: () => {
+    settings.muted = sound.toggle();
+    saveSettings(settings);
+    ui.showMsg(t(settings.muted ? 'sound_off' : 'sound_on'), 1200);
+  },
+  help: () => (ui.modalOpen === 'help' ? ui.closeModal() : ui.openModal('help')),
+  toggleMenu: () => (ui.modalOpen ? ui.closeModal() : ui.openModal('spots')),
+  cycleTime: () => setTime(TIMES[(TIMES.indexOf(settings.time) + 1) % TIMES.length]),
+  recenter: () => {
+    camYaw = player.yaw + Math.PI;
+  },
+  escape: () => photo && togglePhoto(),
+  stick: (a, x, y, dx, dy) => ui.stick(a, x, y, dx, dy),
+  // ---- UI callbacks
+  goto: gotoSpot,
+  setTime,
+  share,
+  photoFov: (v) => (photoFov = v),
+  photoHide: (h) => {
+    player.root.visible = !h && !player.riding;
+    shadowForce = true;
+  },
+  capture: () => (wantShot = true),
+  modal: (open) => {
+    modalOpen = open;
+    if (open) document.exitPointerLock?.();
+  },
+  changed: (key) => {
+    if (key === 'quality') {
+      const next = resolveLevel();
+      if (next !== level) applyQuality(next);
+    } else if (key === 'volume') sound.setVolume(settings.volume);
+    else if (key === 'muted') {
+      sound.muted = settings.muted;
+      sound.applyVolume();
+    } else if (key === 'viewMode' && settings.viewMode !== 'lock') document.exitPointerLock?.();
+    else if (key === 'lang') {
+      ui.lastWhere = '';
+      ui.lastTrain = '';
+    }
+    saveSettings(settings);
+  },
+};
+
+ui = new UI({ t, settings, hooks });
+input = new Input(canvas, settings, hooks);
+$('fps').classList.toggle('hidden', !settings.fps);
+$('bRun').addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  input.touch.run = !input.touch.run;
+  $('bRun').classList.toggle('on', input.touch.run);
+});
+$('bJump').addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  hooks.jump();
+});
+
+// ---------------------------------------------------------------------------------------------------- crossing rules
 function gate(nx, nz, ox, oz) {
   // the crossing is closed while the alarm rings: one cannot walk in from outside
   if (!train.alarm) return false;
@@ -287,78 +428,281 @@ function gate(nx, nz, ox, oz) {
   return inNew && !inOld;
 }
 
-function frame() {
-  requestAnimationFrame(frame);
-  const dt = Math.min(clock.getDelta(), 0.05);
-  const t = clock.elapsedTime;
-  if (sea) {
-    sea.userData.normalMap.offset.set((t * 0.0009) % 1, (t * 0.0006) % 1);
-    sea.position.x = camera.position.x;
-    sea.position.z = camera.position.z;
+let pushMsg = false;
+let wasAlarm = false;
+function crossingRules(dt) {
+  const p = player.pos;
+  if (train.alarm && !wasAlarm) ui.showMsg(t('alarm'), 3000);
+  wasAlarm = train.alarm;
+  if (train.hits(p)) {
+    // knocked back to the nearer verge instead of being sent home
+    const side = p.z >= 0 ? 1 : -1;
+    const z = side * 2.5;
+    if (ground.walkable(p.x, z) && !ground.isSolid(p.x, z)) player.teleport(p.x, z, player.yaw);
+    else player.teleport(meta.spawn.x, -meta.spawn.y, player.yaw);
+    ui.showMsg(t('hit'), 3200);
+    return;
   }
-  if (!player) {
+  if (train.alarm && Math.abs(p.x) < 4.2 && Math.abs(p.z) < 3.6) {
+    const s = p.z >= 0 ? 1 : -1;
+    const nz = p.z + s * 2.6 * dt;
+    if (ground.walkable(p.x, nz) && !ground.isSolid(p.x, nz)) p.z = nz;
+    else p.x += (p.x >= 0 ? 1 : -1) * 2.6 * dt;
+    if (!pushMsg) {
+      pushMsg = true;
+      ui.showMsg(t('clearCrossing'), 2200);
+    }
+  } else pushMsg = false;
+}
+
+// ---------------------------------------------------------------------------------------------------- camera
+let fovNow = 58;
+function updateCamera(dt, cmd) {
+  const look = input.drainLook();
+  const zoom = input.drainZoom();
+  let fovTarget = 58;
+  if (player.riding) {
+    // first person from the seat: the walls are back-face culled so the scenery is visible all around
+    rideYaw -= look.dx;
+    ridePitch = clamp(ridePitch + look.dy, -0.9, 0.9);
+    train.seat(tmpA);
+    tmpA.y += 1.4 + train.inner.position.y;
+    camPos.copy(tmpA);
+    const cp = Math.cos(ridePitch);
+    tmpB.set(-Math.sin(rideYaw) * cp, -Math.sin(ridePitch), -Math.cos(rideYaw) * cp).add(tmpA);
+    camera.position.copy(camPos);
+    camera.lookAt(tmpB);
+    fovTarget = 68;
+    player.pos.copy(tmpA).y -= 1.4;
+    camSnap = true;
+  } else {
+    camYaw -= look.dx;
+    camPitch = clamp(camPitch + look.dy, -0.12, 1.25);
+    camDist = clamp(camDist * (1 + zoom), photo ? 0.8 : 2.2, photo ? 40 : 16);
+    // "steer follow": with analog steering (stick) the camera slowly swings toward the walking direction
+    if (settings.autoCam && !settings.reduceMotion && player.speed > 0.8 && cmd.y > 0.4 && Math.abs(cmd.x) < 0.6 && performance.now() - input.lastLook > 1200) {
+      let d = player.yaw + Math.PI - camYaw;
+      d = Math.atan2(Math.sin(d), Math.cos(d));
+      camYaw += clamp(d, -1, 1) * 1.6 * dt;
+    }
+    camTarget.set(player.pos.x, player.pos.y + 1.45, player.pos.z);
+    const cp = Math.cos(camPitch);
+    tmpA.set(Math.sin(camYaw) * cp, Math.sin(camPitch), Math.cos(camYaw) * cp);
+    // keep the camera outside walls: shorten the boom when the ray crosses a building footprint
+    let allowed = camDist;
+    const hit = ground.segmentBlocked(camTarget.x, camTarget.z, camTarget.x + tmpA.x * camDist, camTarget.z + tmpA.z * camDist);
+    if (hit) allowed = Math.max(1.0, camDist * hit - 0.5);
+    camDistEff += (allowed - camDistEff) * (allowed < camDistEff ? 1 - Math.exp(-dt * 20) : 1 - Math.exp(-dt * 3));
+    if (camSnap) camDistEff = allowed;
+    tmpB.copy(camTarget).addScaledVector(tmpA, camDistEff);
+    tmpB.y += 0.25;
+    const gh = ground.height(tmpB.x, tmpB.z);
+    const floor = (gh === gh ? gh : player.pos.y) + 0.55;
+    if (tmpB.y < floor) tmpB.y = floor;
+    if (camSnap) camPos.copy(tmpB);
+    else camPos.lerp(tmpB, 1 - Math.exp(-dt * 14));
+    camera.position.copy(camPos);
+    camera.lookAt(camTarget);
+    if (photo) fovTarget = photoFov;
+    else if (!settings.reduceMotion) fovTarget = 58 + clamp((player.speed - SPEED.walk) / (SPEED.sprint - SPEED.walk), 0, 1) * 9;
+  }
+  camSnap = false;
+  if (photo && !player.riding) fovTarget = photoFov;
+  fovNow += (fovTarget - fovNow) * (1 - Math.exp(-dt * 6));
+  if (Math.abs(camera.fov - fovNow) > 0.02) {
+    camera.fov = fovNow;
+    camera.updateProjectionMatrix();
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------- shadow box
+const lightX = new THREE.Vector3();
+const lightY = new THREE.Vector3();
+const shadowCenter = new THREE.Vector3();
+let shadowFrame = 0;
+function updateShadow(center) {
+  const L = tod.lightDir;
+  lightX.crossVectors(UP, L).normalize();
+  lightY.crossVectors(L, lightX);
+  const texel = (2 * preset.shadowRange) / preset.shadow;
+  const a = center.dot(lightX);
+  const b = center.dot(lightY);
+  shadowCenter.copy(center).addScaledVector(lightX, Math.round(a / texel) * texel - a).addScaledVector(lightY, Math.round(b / texel) * texel - b);
+  sunLight.position.copy(shadowCenter).addScaledVector(L, 160);
+  sunLight.target.position.copy(shadowCenter);
+  sunLight.target.updateMatrixWorld();
+  let need = shadowForce || tod.moving || player.speed > 0.03 || player.jumpT !== null || (train.armT > 0.01 && train.armT < 0.99);
+  if (!need && train.state !== 'wait' && train.speed > 0.05) {
+    const [x0, x1] = train.span();
+    need = center.x > x0 - preset.shadowRange - 20 && center.x < x1 + preset.shadowRange + 20;
+  }
+  if (!need && ++shadowFrame % 4 === 0) need = true; // idle animation / drifting clouds
+  sunLight.shadow.needsUpdate = need;
+  shadowForce = false;
+}
+
+// ---------------------------------------------------------------------------------------------------- loop
+let last = performance.now();
+let elapsed = 0;
+let uiTimer = 0;
+let mapTimer = 0;
+let lastPrompt = null;
+let slow = 0;
+const trainView = { visible: false, span: [0, 0] };
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  const raw = Math.min((now - last) / 1000, 0.5);
+  last = now;
+  const dt = Math.min(raw, 0.05);
+  elapsed += dt;
+  U.uTime.value = elapsed;
+  if (raw > 0) renderer.tick(raw);
+  ui.fps(raw);
+
+  if (!ready) {
+    camera.position.set(0, 3, 0);
+    camera.lookAt(0, 3, -1);
+    sky.position.copy(camera.position);
+    sky.scale.setScalar(20000);
     renderer.render(scene, camera);
     return;
   }
-  train.update(dt);
-  if (started) {
-    player.update(dt, readInput(), camYaw, gate);
-    if (train.hits(player.pos)) {
-      player.teleport(meta.spawn.x, -meta.spawn.y, Math.atan2(-3.6, -5.2));
-      showMsg('電車に注意！ 踏切の外へ戻りました', 3200);
-    }
-    if (train.alarm && !wasAlarm) showMsg('カンカンカン… 電車が来ます', 3000);
-    wasAlarm = train.alarm;
-    updateWhere();
-    if (sound) sound.update(train.alarm, Math.hypot(player.pos.x, player.pos.z), clamp((player.pos.z - 12) / 25, 0, 1));
-  } else {
-    player.update(dt, { x: 0, y: 0, run: false, sprint: false }, camYaw, null);
-  }
 
-  // follow camera
-  camTarget.set(player.pos.x, player.pos.y + 1.45, player.pos.z);
-  const cp = Math.cos(camPitch);
-  desired.set(camTarget.x + Math.sin(camYaw) * cp * camDist, camTarget.y + Math.sin(camPitch) * camDist + 0.25, camTarget.z + Math.cos(camYaw) * cp * camDist);
-  const gh = ground.height(desired.x, desired.z);
-  const floor = (gh === gh ? gh : player.pos.y) + 0.55;
-  if (desired.y < floor) desired.y = floor;
-  camPos.lerp(desired, 1 - Math.exp(-dt * 14));
-  if (camPos.lengthSq() === 0) camPos.copy(desired);
-  camera.position.copy(camPos);
-  camera.lookAt(camTarget);
+  input.pollPad();
+  const cmd = isBlocked() ? ZERO : input.read();
+  train.update(dt, tod.night);
+  if (started && !player.riding && !photo) {
+    player.update(dt, cmd, camYaw, gate);
+    crossingRules(dt);
+  } else player.update(dt, ZERO, camYaw, null);
+  if (!started) camYaw += dt * 0.06; // slow orbit behind the title panel
+
+  updateCamera(dt, cmd);
+  tod.update(dt, player.pos);
   sky.position.copy(camera.position);
   sky.scale.setScalar(20000);
+  sea.position.x = Math.round(camera.position.x / 50) * 50;
+  sea.position.z = Math.round(camera.position.z / 50) * 50;
+  sea.userData.normalMap.offset.set((elapsed * 0.0009) % 1, (elapsed * 0.0006) % 1);
+  glow.visible = preset.glow && glow.material.opacity > 0.01;
+  updateShadow(player.pos);
 
-  sun.position.copy(player.pos).addScaledVector(sunDir, 160);
-  sun.target.position.copy(player.pos);
-  sun.target.updateMatrixWorld();
+  // ---- audio + HUD
+  const dTrain = train.state === 'wait' ? 1e9 : (() => {
+    const [a, b] = train.span();
+    return Math.abs(player.pos.x - clamp(player.pos.x, a, b)) + Math.abs(player.pos.z);
+  })();
+  sound.update({ alarm: train.alarm, crossDist: Math.hypot(player.pos.x, player.pos.z), sea: clamp((player.pos.z - 12) / 25, 0, 1), night: tod.night, trainSpeed: train.speed, trainDist: dTrain, riding: player.riding });
+
+  uiTimer += dt;
+  if (uiTimer > 0.25 && started) {
+    uiTimer = 0;
+    let best = null;
+    let bd = 1e9;
+    for (const p of meta.poi) {
+      const d = Math.hypot(p.x - player.pos.x, -p.y - player.pos.z);
+      if (d < bd) {
+        bd = d;
+        best = p;
+      }
+    }
+    ui.setWhere(best ? (settings.lang === 'en' ? best.en : best.name) : '', bd);
+    ui.setTrain(train.info(), player.riding);
+    const prompt = player.riding ? (train.state === 'dwell' ? t('alightPrompt') : null) : train.canBoard(player.pos) ? t('boardPrompt') : null;
+    if (prompt !== lastPrompt) {
+      lastPrompt = prompt;
+      ui.setPrompt(prompt, !isTouch);
+    }
+  }
+  mapTimer += dt;
+  if (mapTimer > 0.08 && started && !photo) {
+    mapTimer = 0;
+    trainView.visible = train.state !== 'wait';
+    trainView.span = train.span();
+    const yaw = player.riding ? (train.dir > 0 ? Math.PI / 2 : -Math.PI / 2) : player.yaw;
+    ui.drawMinimap(player.pos, yaw, trainView);
+  }
+
+  // auto quality: step down one preset when even a reduced resolution cannot hold the frame rate
+  if (settings.quality === 'auto' && !params.has('q') && renderer.govern) {
+    if (renderer.ema > 27 && renderer.dpr <= renderer.baseDpr * 0.7) slow += dt;
+    else slow = Math.max(0, slow - dt);
+    if (slow > 5 && level !== 'low') {
+      applyQuality(level === 'high' ? 'medium' : 'low');
+      ui.showMsg(t('quality_now', { q: t(`q_${level}`) }), 2500);
+      slow = 0;
+    }
+  }
 
   renderer.render(scene, camera);
+  if (wantShot) {
+    wantShot = false;
+    savePhoto();
+  }
 }
 
 addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.resize();
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) sound.ctx?.suspend();
 });
 
 $('start').addEventListener('click', () => {
   started = true;
+  camSnap = true;
   $('loading').classList.add('hidden');
   $('hud').classList.remove('hidden');
-  if (matchMedia('(pointer: coarse)').matches) $('touch').classList.remove('hidden');
+  if (isTouch) $('touch').classList.remove('hidden');
+  sound.volume = settings.volume;
+  sound.muted = settings.muted;
   sound.init();
-  showMsg('散歩をはじめましょう', 2200);
-  setTimeout(() => $('help').style.opacity = '0.7', 6000);
+  ui.showMsg(t('start_msg'), 2200);
+  setTimeout(() => ($('help').style.opacity = '0.7'), 6000);
+  canvas.focus();
 });
 
-load()
-  .then(() => {
-    camPos.set(0, 0, 0);
-    frame();
-    window.__enoden = { get player() { return player; }, get train() { return train; }, camera, scene, ground, setCam: (y, p, d) => { camYaw = y; camPitch = p; camDist = d; }, start: () => $('start').click() };
-  })
-  .catch((e) => {
-    console.error(e);
-    $('loadtext').textContent = `読み込みに失敗しました: ${e.message}`;
-  });
+requestAnimationFrame((n) => {
+  last = n;
+  frame(n);
+});
+load().catch((e) => {
+  console.error(e);
+  $('loadtext').textContent = `${t('failed')}: ${e.message}`;
+});
+
+// debug / test handle
+window.__enoden = {
+  THREE,
+  get worldRoot() { return worldRoot; },
+  get player() { return player; },
+  get train() { return train; },
+  get ready() { return ready; },
+  get level() { return level; },
+  camera,
+  scene,
+  renderer,
+  tod,
+  settings,
+  get ui() { return ui; },
+  get ground() { return ground; },
+  setCam: (y, p, d) => {
+    camYaw = y;
+    camPitch = p;
+    camDist = d;
+    camSnap = true;
+  },
+  setTime,
+  start: () => $('start').click(),
+  goto: (x, z, yaw) => {
+    player.teleport(x, z, yaw);
+    camYaw = yaw + Math.PI;
+    camSnap = true;
+    shadowForce = true;
+  },
+  board: toggleBoard,
+  applyQuality,
+};

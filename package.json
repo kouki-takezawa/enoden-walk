@@ -1,18 +1,20 @@
 {
   "name": "enoden-walk",
   "private": true,
-  "version": "1.0.0",
+  "version": "2.0.0",
   "type": "module",
   "description": "江ノ電 鎌倉高校前 散歩 — 人物を操作して歩き回れる3Dウェブアプリ (Three.js + Blender生成モデル)",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run"
   },
   "dependencies": {
     "three": "^0.170.0"
   },
   "devDependencies": {
-    "vite": "^6.0.0"
+    "vite": "^6.0.0",
+    "vitest": "^2.1.9"
   }
 }

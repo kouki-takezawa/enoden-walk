@@ -1,31 +1,52 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
-const TRAIN_LEN = 26.3;      // two-car set, cab end at +x of the model (x = 0.6 at the origin)
+const LEN = 26.3; // two-car set, cab end at +x of the model (x = 0.6 at the origin)
 const CAB_X = 0.6;
-const SPEED = 11;             // m/s (~40 km/h)
-const START = 150;
+const CRUISE = 11; // m/s (~40 km/h)
+const ACCEL = 0.9;
+const DECEL = 1.1;
+const START = 160;
+const END = 205; // riders turn around here
+const DWELL = 14;
 
-/** Runs the Enoden set back and forth along the track and drives the level crossing (alarm lamps + barrier arms). */
+/** Runs the Enoden set along the track with a stop at the platform, drives the level crossing (alarm lamps + barrier arms) and can carry the player. */
 export class Train {
   constructor(trainGltf, world, meta) {
+    this.meta = meta;
     this.group = new THREE.Group();
-    this.group.add(trainGltf.scene);
+    this.inner = new THREE.Group();
+    this.group.add(this.inner);
+    this.inner.add(trainGltf.scene);
+    this.mats = new Set();
     trainGltf.scene.traverse((o) => {
       if (o.isMesh) {
         o.castShadow = true;
         o.receiveShadow = true;
         o.frustumCulled = false;
+        const ms = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of ms) {
+          this.mats.add(m);
+          if (m.name && m.name.includes('Glass')) {
+            this.glass = m;
+            this.glassMesh = o;
+          }
+        }
       }
     });
-    this.dir = 1;
+    this.dir = -1; // the first run is eastbound (dir flips before each run)
     this.front = -START;
     this.state = 'wait';
-    this.timer = 6;
+    this.timer = 7;
+    this.speed = 0;
+    this.stopping = false;
     this.alarm = false;
-    this.armT = 0;              // 0 = raised, 1 = lowered
+    this.armT = 0;
     this.flip = false;
     this.flipT = 0;
-    this.meta = meta;
+    this.time = 0;
+    this.rider = false;
+    this.pf = meta.platform;
 
     this.arms = [];
     for (const a of meta.crossing.arms) {
@@ -40,9 +61,44 @@ export class Train {
       this.dark = one(this.lampOff.material);
       this.bright.emissiveIntensity = 1.3;
     }
+
+    // headlight (the +x end of the model is always the leading cab) + interior passengers
+    this.head = new THREE.SpotLight(0xffe2b0, 0, 90, 0.5, 0.5, 1.2);
+    this.head.position.set(CAB_X + 0.3, 1.5, 0);
+    this.head.target.position.set(CAB_X + 30, 0.8, 0);
+    this.inner.add(this.head, this.head.target);
+    this.passengers = this._passengers();
+    this.inner.add(this.passengers);
     this.place();
     this.setArms(0);
     this.setLamps(false, 0);
+  }
+
+  _passengers() {
+    const head = new THREE.SphereGeometry(0.11, 8, 6);
+    head.translate(0, 0.62, 0);
+    const body = new THREE.BoxGeometry(0.36, 0.55, 0.24);
+    body.translate(0, 0.2, 0);
+    const geo = mergeGeometries([head.toNonIndexed(), body.toNonIndexed()]);
+    const mat = new THREE.MeshStandardMaterial({ color: 0x2c2f3a, roughness: 0.9 });
+    const slots = [];
+    for (const cx of [CAB_X - 6.55, CAB_X - 20.55]) for (let k = -4; k <= 4; k++) for (const z of [-0.78, 0.78]) slots.push([cx + k * 1.28, z]);
+    const im = new THREE.InstancedMesh(geo, mat, slots.length);
+    const m = new THREE.Matrix4();
+    const c = new THREE.Color();
+    let n = 0;
+    slots.forEach(([x, z], i) => {
+      const r = Math.abs(Math.sin(i * 12.9898) * 43758.5453) % 1;
+      if (r > 0.42) return;
+      m.makeRotationY(z > 0 ? Math.PI : 0).setPosition(x, 1.07 + 0.36, z);
+      im.setMatrixAt(n, m);
+      c.setHSL(0.55 + 0.15 * r, 0.25, 0.14 + 0.2 * r);
+      im.setColorAt(n, c);
+      n++;
+    });
+    im.count = n;
+    im.frustumCulled = false;
+    return im;
   }
 
   place() {
@@ -53,18 +109,49 @@ export class Train {
       this.group.rotation.y = Math.PI;
       this.group.position.set(this.front + CAB_X, 0, 0);
     }
-    this.group.visible = this.state === 'run';
+    this.group.visible = this.state !== 'wait';
   }
 
   /** x range [min, max] covered by the set */
   span() {
-    return this.dir > 0 ? [this.front - TRAIN_LEN, this.front] : [this.front, this.front + TRAIN_LEN];
+    return this.dir > 0 ? [this.front - LEN, this.front] : [this.front, this.front + LEN];
+  }
+
+  stopFront() {
+    return this.dir > 0 ? this.pf.x1 - 2 : this.pf.x0 + 2;
   }
 
   hits(p) {
-    if (this.state !== 'run') return false;
+    if (this.state === 'wait' || this.rider) return false;
     const [a, b] = this.span();
     return p.x > a - 0.4 && p.x < b + 0.4 && Math.abs(p.z) < 1.6 && p.y < 4.2;
+  }
+
+  /** seen from inside the walls are dropped (single sided) so the scenery is visible all around; outside they are double sided again */
+  setFirstPerson(on) {
+    for (const m of this.mats) {
+      m.side = on ? THREE.FrontSide : THREE.DoubleSide;
+      m.needsUpdate = true;
+    }
+    if (this.glassMesh) this.glassMesh.visible = !on; // the lit window panes would veil the view from the seat
+  }
+
+  /** the passenger's seat in world space */
+  seat(out) {
+    return out.set(this.front - this.dir * 9.0, 1.07, 0);
+  }
+
+  /** can a player at p (world) board now? */
+  canBoard(p) {
+    if (this.state !== 'dwell' || this.rider) return false;
+    const [a, b] = this.span();
+    return p.x > a - 1 && p.x < b + 1 && p.z < -1.0 && p.z > -this.pf.y1 - 2.5;
+  }
+
+  info() {
+    if (this.state === 'wait') return { state: 'wait', dir: -this.dir, s: Math.max(0, Math.ceil(this.timer)) };
+    if (this.state === 'dwell') return { state: 'dwell', dir: this.dir, s: Math.max(0, Math.ceil(this.timer)) };
+    return { state: this.stopping ? 'arriving' : 'passing', dir: this.dir, s: 0 };
   }
 
   setArms(t) {
@@ -85,25 +172,66 @@ export class Train {
     }
   }
 
-  update(dt) {
+  _computeAlarm() {
+    if (this.state === 'wait') return false;
+    const [a, b] = this.span();
+    if (this.dir > 0) {
+      const leaving = !this.stopping || (this.state === 'dwell' && this.timer < 3.5);
+      return leaving && a < 9 && b > -60;
+    }
+    // westbound: from ~7 s before the cab reaches the crossing until the tail has cleared it
+    return this.state !== 'dwell' && a < CRUISE * 7 && b > -9 && this.stopping;
+  }
+
+  update(dt, night = 0) {
+    this.time += dt;
     if (this.state === 'wait') {
       this.timer -= dt;
       if (this.timer <= 0) {
         this.dir = -this.dir;
         this.front = this.dir > 0 ? -START : START;
-        this.state = 'run';
+        this.state = 'move';
+        this.stopping = true;
+        this.speed = CRUISE;
+      }
+    } else if (this.state === 'dwell') {
+      this.speed = 0;
+      this.timer -= dt;
+      if (this.timer <= 0) {
+        this.state = 'move';
+        this.stopping = false;
       }
     } else {
-      this.front += this.dir * SPEED * dt;
-      if ((this.dir > 0 && this.front - TRAIN_LEN > START) || (this.dir < 0 && this.front + TRAIN_LEN < -START)) {
-        this.state = 'wait';
-        this.timer = 22 + Math.random() * 12;
+      if (this.stopping) {
+        const dist = (this.stopFront() - this.front) * this.dir;
+        const lim = Math.sqrt(2 * DECEL * Math.max(dist, 0)) + 0.4;
+        this.speed = Math.min(this.speed + ACCEL * dt, CRUISE, lim);
+        if (dist <= 0.06 || (dist < 0.8 && this.speed < 0.45)) {
+          this.front = this.stopFront();
+          this.speed = 0;
+          this.state = 'dwell';
+          this.timer = DWELL;
+        }
+      } else {
+        this.speed = Math.min(this.speed + ACCEL * dt, CRUISE);
+      }
+      this.front += this.dir * this.speed * dt;
+      const [a, b] = this.span();
+      if (!this.stopping && ((this.dir > 0 && a > (this.rider ? END : START)) || (this.dir < 0 && b < -(this.rider ? END : START)))) {
+        if (this.rider) {
+          // turn around with the passenger on board and come back to the platform
+          this.front = this.dir > 0 ? a : b;
+          this.dir = -this.dir;
+          this.stopping = true;
+          this.speed = 0;
+        } else {
+          this.state = 'wait';
+          this.timer = 20 + Math.random() * 12;
+          this.speed = 0;
+        }
       }
     }
-    // alarm: 7 s before the cab reaches the crossing until the tail has cleared it
-    const [a, b] = this.span();
-    const lead = SPEED * 7;
-    this.alarm = this.state === 'run' && a < 10 + 0 && b > -10 && (this.dir > 0 ? this.front > -lead : this.front < lead);
+    this.alarm = this._computeAlarm();
     this.armT += ((this.alarm ? 1 : 0) - this.armT) * Math.min(1, dt * 1.3);
     this.setArms(this.armT);
     this.flipT += dt;
@@ -112,6 +240,17 @@ export class Train {
       this.flip = !this.flip;
     }
     this.setLamps(this.alarm, this.flip);
+
+    // running sway + night lights
+    const v = this.speed / CRUISE;
+    this.inner.rotation.z = Math.sin(this.time * 6.1 + this.front * 0.8) * 0.0035 * v;
+    this.inner.rotation.x = Math.sin(this.time * 4.3) * 0.0022 * v;
+    this.inner.position.y = Math.abs(Math.sin(this.front * 0.52)) * 0.006 * v;
+    this.head.intensity = night * 260 * (this.state === 'wait' ? 0 : 1);
+    if (this.glass) {
+      this.glass.emissive.setRGB(1.0, 0.82, 0.55);
+      this.glass.emissiveIntensity = night * 0.55;
+    }
     this.place();
   }
 }
