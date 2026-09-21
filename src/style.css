@@ -82,5 +82,13 @@ body.touch #help { display: none; }
 #fade { position: fixed; inset: 0; z-index: 30; background: #000; opacity: 0; pointer-events: none; transition: opacity .22s; }
 #fade.on { opacity: 1; }
 
-@media (max-width: 700px) { #where { font-size: 13px; max-width: 55vw; } #trainbox { font-size: 12px; } h1 { font-size: 22px; } }
+@media (max-width: 700px) { #where { font-size: 13px; } #trainbox { font-size: 12px; } h1 { font-size: 22px; } }
+@media (max-width: 560px) {
+  #toolbar { gap: 6px; }
+  #toolbar button { width: 40px; height: 40px; font-size: 18px; }
+  #where { top: calc(58px + env(safe-area-inset-top)); max-width: calc(100vw - 150px); }
+  #trainbox { top: calc(96px + env(safe-area-inset-top)); max-width: calc(100vw - 150px); }
+  body.touch #mapwrap { top: calc(58px + env(safe-area-inset-top)); width: 104px; height: 104px; }
+  body.touch #fps { top: calc(166px + env(safe-area-inset-top)); }
+}
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }

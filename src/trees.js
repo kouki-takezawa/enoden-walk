@@ -30,7 +30,7 @@ function part(geo, hex, m, jitter = 0.12) {
   return colored(g, hex, jitter);
 }
 const trunk = (r0, r1, h, hex) => part(new THREE.CylinderGeometry(r0, r1, h, 6, 1), hex, T(0, h / 2, 0), 0.05);
-const blob = (r, hex, x, y, z, sy = 0.8) => part(new THREE.IcosahedronGeometry(r, 1), hex, T(x, y, z).multiply(S(1, sy, 1)));
+const blob = (r, hex, x, y, z, sy = 0.8, detail = 1) => part(new THREE.IcosahedronGeometry(r, detail), hex, T(x, y, z).multiply(S(1, sy, 1)));
 
 /** leaf texture: several green leaves with alpha, drawn once on a canvas */
 function leafTexture() {
@@ -111,10 +111,11 @@ function cards(lumps, n, size, hex, seed) {
 }
 
 function treeGeometries(useCards) {
-  const broad = mergeGeometries([trunk(0.04, 0.07, 0.55, 0x5a4330), blob(0.34, 0x486f2a, 0, 0.78, 0), blob(0.24, 0x5b8232, 0.18, 0.62, 0.1), blob(0.22, 0x3f6626, -0.18, 0.66, -0.08)]);
-  const pine = mergeGeometries([trunk(0.03, 0.055, 0.8, 0x4a3828), blob(0.26, 0x2c4d2e, 0.05, 0.86, 0, 0.5), blob(0.2, 0x35583a, -0.12, 0.7, 0.05, 0.5), blob(0.17, 0x2a4a2b, 0.1, 0.6, -0.1, 0.5)]);
+  const d = useCards ? 0 : 1; // with leaf cards the core only needs a rough volume
+  const broad = mergeGeometries([trunk(0.04, 0.07, 0.55, 0x5a4330), blob(0.34, 0x486f2a, 0, 0.78, 0, 0.8, d), blob(0.24, 0x5b8232, 0.18, 0.62, 0.1, 0.8, d), blob(0.22, 0x3f6626, -0.18, 0.66, -0.08, 0.8, d)]);
+  const pine = mergeGeometries([trunk(0.03, 0.055, 0.8, 0x4a3828), blob(0.26, 0x2c4d2e, 0.05, 0.86, 0, 0.5, d), blob(0.2, 0x35583a, -0.12, 0.7, 0.05, 0.5, d), blob(0.17, 0x2a4a2b, 0.1, 0.6, -0.1, 0.5, d)]);
   const cedar = mergeGeometries([trunk(0.03, 0.05, 0.3, 0x4a3828), part(new THREE.ConeGeometry(0.26, 0.9, 7, 1), 0x274a2b, T(0, 0.65, 0))]);
-  const shrub = mergeGeometries([blob(0.5, 0x44662a, 0, 0.3, 0, 0.7), blob(0.32, 0x54782f, 0.28, 0.22, 0.1, 0.7)]);
+  const shrub = mergeGeometries([blob(0.5, 0x44662a, 0, 0.3, 0, 0.7, d), blob(0.32, 0x54782f, 0.28, 0.22, 0.1, 0.7, d)]);
   const out = [{ core: broad }, { core: pine }, { core: cedar }, { core: shrub }];
   if (useCards) {
     out[0].cards = cards([[0, 0.78, 0, 0.36, 0.30, 0.36], [0.18, 0.62, 0.1, 0.26, 0.2, 0.26], [-0.18, 0.66, -0.08, 0.24, 0.2, 0.24]], 90, 0.095, 0x6f9a3c, 11);
@@ -141,6 +142,8 @@ function windify(mat, on) {
   };
 }
 
+const CELL = 90; // metres: trees are grouped so that culling (main + shadow view) works and distant cells can drop their leaf cards
+
 export function makeTrees(data, opts) {
   const group = new THREE.Group();
   const geos = treeGeometries(opts.leafCards);
@@ -148,34 +151,55 @@ export function makeTrees(data, opts) {
   windify(coreMat, opts.wind);
   const leafMat = new THREE.MeshStandardMaterial({ vertexColors: true, map: leafTexture(), alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.85 });
   windify(leafMat, opts.wind);
-  const byKind = [[], [], [], []];
-  for (const t of data.trees) byKind[t[0]].push(t);
+  // bucket: kind -> cell key -> trees
+  const buckets = [new Map(), new Map(), new Map(), new Map()];
+  data.trees.forEach((tr, i) => {
+    const cx = Math.floor(tr[1] / CELL);
+    const cz = Math.floor(tr[3] / CELL);
+    const key = `${cx},${cz}`;
+    const m = buckets[tr[0]];
+    if (!m.has(key)) m.set(key, { cx, cz, list: [] });
+    m.get(key).list.push([tr, i]);
+  });
   const m4 = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const up = new THREE.Vector3(0, 1, 0);
   const col = new THREE.Color();
   const v3 = new THREE.Vector3();
   const sc = new THREE.Vector3();
-  byKind.forEach((list, k) => {
-    if (!list.length) return;
-    const parts = [[geos[k].core, coreMat, k !== 3]];
-    if (geos[k].cards) parts.push([geos[k].cards, leafMat, false]);
-    for (const [geo, mat, cast] of parts) {
-      const im = new THREE.InstancedMesh(geo, mat, list.length);
-      list.forEach((t, i) => {
-        const [, x, y, z, h, w, rot] = t;
-        q.setFromAxisAngle(up, rot);
-        m4.compose(v3.set(x, y, z), q, sc.set(w * 1.15, h, w * 1.15));
-        im.setMatrixAt(i, m4);
-        const v = 0.82 + 0.3 * (Math.abs(Math.sin(i * 91.7 + k) * 43758.5453) % 1);
-        col.setRGB(v, v * (0.96 + 0.08 * Math.sin(i)), v * 0.94);
-        im.setColorAt(i, col);
-      });
-      im.castShadow = cast;
-      im.receiveShadow = true;
-      im.frustumCulled = false;
-      group.add(im);
+  buckets.forEach((cells, k) => {
+    for (const { cx, cz, list } of cells.values()) {
+      const parts = [[geos[k].core, coreMat, k !== 3, false]];
+      if (geos[k].cards) parts.push([geos[k].cards, leafMat, false, true]);
+      for (const [geo, mat, cast, isCard] of parts) {
+        const im = new THREE.InstancedMesh(geo, mat, list.length);
+        list.forEach(([t, i], n) => {
+          const [, x, y, z, h, w, rot] = t;
+          q.setFromAxisAngle(up, rot);
+          m4.compose(v3.set(x, y, z), q, sc.set(w * 1.15, h, w * 1.15));
+          im.setMatrixAt(n, m4);
+          const v = 0.82 + 0.3 * (Math.abs(Math.sin(i * 91.7 + k) * 43758.5453) % 1);
+          col.setRGB(v, v * (0.96 + 0.08 * Math.sin(i)), v * 0.94);
+          im.setColorAt(n, col);
+        });
+        im.castShadow = cast;
+        im.receiveShadow = true;
+        im.computeBoundingSphere();
+        im.userData = { cx: (cx + 0.5) * CELL, cz: (cz + 0.5) * CELL, card: isCard, canCast: cast };
+        group.add(im);
+      }
     }
   });
   return group;
+}
+
+/** distance based detail: leaf cards only near the player, shadows only inside the shadow box (call a few times per second) */
+export function updateTreeLOD(group, px, pz, shadowRange) {
+  const R = CELL * 0.71;
+  for (const im of group.children) {
+    const u = im.userData;
+    const d = Math.hypot(u.cx - px, u.cz - pz);
+    if (u.card) im.visible = d < 120 + R;
+    im.castShadow = u.canCast && d < shadowRange + 50 + R;
+  }
 }

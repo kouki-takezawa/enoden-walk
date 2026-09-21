@@ -47,6 +47,7 @@ export class Train {
     this.time = 0;
     this.rider = false;
     this.pf = meta.platform;
+    this._span = [0, 0];
 
     this.arms = [];
     for (const a of meta.crossing.arms) {
@@ -114,7 +115,15 @@ export class Train {
 
   /** x range [min, max] covered by the set */
   span() {
-    return this.dir > 0 ? [this.front - LEN, this.front] : [this.front, this.front + LEN];
+    const s = this._span;
+    if (this.dir > 0) {
+      s[0] = this.front - LEN;
+      s[1] = this.front;
+    } else {
+      s[0] = this.front;
+      s[1] = this.front + LEN;
+    }
+    return s; // shared array: read it right away
   }
 
   stopFront() {

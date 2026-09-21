@@ -20,7 +20,7 @@ export class Player {
     this.model.traverse((o) => {
       if (o.name.startsWith('Rig')) o.position.set(0, 0, 0); // the armature object carries the offset it had in the Blender scene: stand on the origin
       if (o.isMesh || o.isSkinnedMesh) {
-        o.castShadow = true;
+        o.castShadow = !/^(Hair|Brows|Eyelids|Eyeball|Lips|Watch)/.test(o.name); // fine parts add triangles to the shadow pass, not to the shadow
         o.receiveShadow = true;
         o.frustumCulled = false;
       }
@@ -38,6 +38,7 @@ export class Player {
     this.riding = false;
     this.onStep = null; // (surfaceId, speed) => void
     this.lastStepHalf = 0;
+    this.w = { idle: 0, walk: 0, run: 0, sprint: 0 };
 
     this.mixer = new THREE.AnimationMixer(this.model);
     this.act = {};
@@ -56,6 +57,26 @@ export class Player {
 
   jump() {
     if (this.jumpT === null && !this.riding) this.jumpT = 0;
+  }
+
+  /** hair is 1800 tufts of 48 triangles (86k triangles): thin it out on weaker presets (0: half, 1: three quarters, 2: all) */
+  setDetail(level) {
+    const keep = [(k) => k % 2 === 0, (k) => k % 4 !== 3, () => true][level] || (() => true);
+    this.model.traverse((o) => {
+      if (o.name !== 'Hair' || !o.geometry.index) return;
+      const g = o.geometry;
+      if (!g.userData.fullIndex) g.userData.fullIndex = g.index.array;
+      const full = g.userData.fullIndex;
+      const out = new full.constructor(full.length);
+      let n = 0;
+      for (let t = 0; t < full.length; t += 3) {
+        if (!keep(Math.floor(full[t] / 28))) continue;
+        out[n++] = full[t];
+        out[n++] = full[t + 1];
+        out[n++] = full[t + 2];
+      }
+      g.setIndex(new THREE.BufferAttribute(out.subarray(0, n), 1));
+    });
   }
 
   /** input: {x, y, run, sprint}; camYaw: camera azimuth; gate(nx, nz, ox, oz): true when the step is closed off */
@@ -133,7 +154,6 @@ export class Player {
     this.idleT = (this.idleT + dt) % NOMINAL.idle;
     if (s > 0.03) {
       const stride = s <= SPEED.walk ? STRIDE.walk : s <= SPEED.run ? STRIDE.walk + (STRIDE.run - STRIDE.walk) * ((s - SPEED.walk) / (SPEED.run - SPEED.walk)) : STRIDE.run + (STRIDE.sprint - STRIDE.run) * clamp((s - SPEED.run) / (SPEED.sprint - SPEED.run), 0, 1);
-      const prev = this.phase;
       this.phase = (this.phase + (dt * s) / stride) % 1;
       // a foot lands at phase 0 (left) and 0.5 (right)
       const half = Math.floor(this.phase * 2);
@@ -141,9 +161,9 @@ export class Player {
         this.lastStepHalf = half;
         if (this.onStep) this.onStep(this.ground.surface(this.pos.x, this.pos.z), s);
       }
-      void prev;
     }
-    const w = { idle: 0, walk: 0, run: 0, sprint: 0 };
+    const w = this.w;
+    w.idle = w.walk = w.run = w.sprint = 0;
     if (s < 0.03) w.idle = 1;
     else if (s <= SPEED.walk) {
       const t = smooth(0.03, 0.75, s);
@@ -158,17 +178,20 @@ export class Player {
       w.run = 1 - t;
       w.sprint = t;
     }
-    const setA = (name, weight, time) => {
-      const a = this.act[name];
-      if (!a) return;
-      a.setEffectiveWeight(weight);
-      a.time = time;
-    };
-    setA('idle', w.idle * (1 - wj), this.idleT);
-    for (const k of ['walk', 'run', 'sprint']) setA(k, w[k] * (1 - wj), this.phase * NOMINAL[k]);
-    setA('jump', wj, Math.min(this.jumpT ?? 0, this.jumpDur - 0.02));
+    this._act('idle', w.idle * (1 - wj), this.idleT);
+    this._act('walk', w.walk * (1 - wj), this.phase * NOMINAL.walk);
+    this._act('run', w.run * (1 - wj), this.phase * NOMINAL.run);
+    this._act('sprint', w.sprint * (1 - wj), this.phase * NOMINAL.sprint);
+    this._act('jump', wj, Math.min(this.jumpT ?? 0, this.jumpDur - 0.02));
     this.mixer.update(0);
     this.apply();
+  }
+
+  _act(name, weight, time) {
+    const a = this.act[name];
+    if (!a) return;
+    a.setEffectiveWeight(weight);
+    a.time = time;
   }
 
   apply() {

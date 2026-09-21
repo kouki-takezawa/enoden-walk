@@ -8,7 +8,8 @@ import { Sound } from './audio.js';
 import { Renderer } from './render.js';
 import { makeSky, TimeOfDay, makeLampGlow } from './sky.js';
 import { makeSea } from './sea.js';
-import { makeTrees } from './trees.js';
+import { makeTrees, updateTreeLOD } from './trees.js';
+import { chunkWorld } from './optimize.js';
 import { U } from './fx.js';
 import { UI } from './ui.js';
 import { makeLoaders, makeEnvironment, tunePBR, styleWorld } from './world.js';
@@ -111,7 +112,8 @@ const tmpA = new THREE.Vector3();
 const tmpB = new THREE.Vector3();
 
 // ---------------------------------------------------------------------------------------------------- loading
-const SIZES = { meta: 0.002, ground: 0.5, surface: 0.12, solid: 0.12, trees: 0.1, world: 4.1, train: 0.27, character: 0.85 };
+// decoded sizes in bytes: progress is measured against them because the server compresses (content-length is the encoded size)
+const SIZES = { meta: 2400, ground: 492984, surface: 123246, solid: 123246, trees: 103893, world: 4097256, train: 271868, character: 852648 };
 const TOTAL = Object.values(SIZES).reduce((a, b) => a + b, 0);
 const done = {};
 function progress(name, frac) {
@@ -122,8 +124,7 @@ function progress(name, frac) {
 async function fetchBuf(name, url) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${url}: ${res.status}`);
-  const len = Number(res.headers.get('content-length')) || 0;
-  if (!res.body || !len || res.headers.get('content-encoding')) {
+  if (!res.body) {
     const b = await res.arrayBuffer();
     progress(name, 1);
     return b;
@@ -136,7 +137,7 @@ async function fetchBuf(name, url) {
     if (fin) break;
     chunks.push(value);
     got += value.length;
-    progress(name, got / len);
+    progress(name, Math.min(0.99, got / SIZES[name]));
   }
   const out = new Uint8Array(got);
   let o = 0;
@@ -172,6 +173,7 @@ async function load() {
 
   worldRoot = worldG.scene;
   tunePBR(worldRoot);
+  chunkWorld(worldRoot); // spatial chunks: culling works for the main view and the shadow view
   styleWorld(worldRoot, preset);
   scene.add(worldRoot);
   treesGroup = makeTrees(trees, preset);
@@ -193,6 +195,7 @@ async function load() {
   const sp = meta.spawn;
   player = new Player(charG, ground, { x: sp.x, z: -sp.y, yaw: Math.atan2(-sp.x, sp.y) });
   player.onStep = (surf, speed) => sound.step(surf, speed);
+  player.setDetail(preset.detail);
   scene.add(player.root);
   camYaw = player.yaw + Math.PI;
 
@@ -242,6 +245,8 @@ function applyQuality(name) {
   disposeGroup(treesGroup);
   treesGroup = makeTrees(treesData, preset);
   scene.add(treesGroup);
+  updateTreeLOD(treesGroup, player.pos.x, player.pos.z, preset.shadowRange);
+  player.setDetail(preset.detail);
   disposeGroup(sea);
   sea = makeSea(ground, meta.sea_level, preset.seaDepth);
   scene.add(sea);
@@ -545,6 +550,9 @@ function updateShadow(center) {
 let last = performance.now();
 let elapsed = 0;
 let uiTimer = 0;
+let lodTimer = 1;
+let soundTimer = 0;
+const soundState = { alarm: false, crossDist: 0, sea: 0, night: 0, trainSpeed: 0, trainDist: 1e9, riding: false };
 let mapTimer = 0;
 let lastPrompt = null;
 let slow = 0;
@@ -588,12 +596,30 @@ function frame(now) {
   glow.visible = preset.glow && glow.material.opacity > 0.01;
   updateShadow(player.pos);
 
+  lodTimer += dt;
+  if (lodTimer > 0.5) {
+    lodTimer = 0;
+    updateTreeLOD(treesGroup, player.pos.x, player.pos.z, preset.shadowRange);
+  }
+
   // ---- audio + HUD
-  const dTrain = train.state === 'wait' ? 1e9 : (() => {
-    const [a, b] = train.span();
-    return Math.abs(player.pos.x - clamp(player.pos.x, a, b)) + Math.abs(player.pos.z);
-  })();
-  sound.update({ alarm: train.alarm, crossDist: Math.hypot(player.pos.x, player.pos.z), sea: clamp((player.pos.z - 12) / 25, 0, 1), night: tod.night, trainSpeed: train.speed, trainDist: dTrain, riding: player.riding });
+  soundTimer += dt;
+  if (soundTimer > 0.033) {
+    soundTimer = 0;
+    let dTrain = 1e9;
+    if (train.state !== 'wait') {
+      const sp = train.span();
+      dTrain = Math.abs(player.pos.x - clamp(player.pos.x, sp[0], sp[1])) + Math.abs(player.pos.z);
+    }
+    soundState.alarm = train.alarm;
+    soundState.crossDist = Math.hypot(player.pos.x, player.pos.z);
+    soundState.sea = clamp((player.pos.z - 12) / 25, 0, 1);
+    soundState.night = tod.night;
+    soundState.trainSpeed = train.speed;
+    soundState.trainDist = dTrain;
+    soundState.riding = player.riding;
+    sound.update(soundState);
+  }
 
   uiTimer += dt;
   if (uiTimer > 0.25 && started) {
@@ -676,7 +702,6 @@ load().catch((e) => {
 
 // debug / test handle
 window.__enoden = {
-  THREE,
   get worldRoot() { return worldRoot; },
   get player() { return player; },
   get train() { return train; },
