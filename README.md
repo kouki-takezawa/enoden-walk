@@ -3,6 +3,8 @@
 夕暮れの江ノ電・鎌倉高校前駅の **1号踏切** と国道134号、相模湾の見える丘の街を、**人物を操作して歩き回れる** 3D ウェブアプリです（Three.js）。
 踏切は電車が来ると警報が鳴り、遮断機が下り、江ノ電が走り抜けます。
 
+**▶ 遊ぶ: https://enoden-walk.vercel.app**
+
 ![screenshot](docs/screenshot.png)
 
 ## 遊び方
@@ -22,6 +24,7 @@
 ## 仕組み
 
 - **フロント**: Vite + Three.js。`src/main.js`（ループ・カメラ・入力）、`player.js`（歩行・走行・ジャンプ、アニメーションの速度ブレンド）、`train.js`（電車と踏切）、`ground.js`（歩ける高さグリッド）、`world.js`（空・海・木）、`audio.js`（警報と波の音を WebAudio で合成）。
+- **描画**: sRGB 出力 + ACES Filmic トーンマッピング、太陽光（`DirectionalLight`）のリアルタイムソフトシャドウ（プレイヤー追従）、空の手続きシェーダから生成した PMREM 環境マップ（`scene.environment`）でのIBL、glTF マテリアルの PBR 調整（`tunePBR`）。
 - **モデル**（`public/models/`）: Blender で手続き生成したシーンを書き出したもの。
   - `world.glb`（Draco 圧縮、約 1.6 MB）: 地形・建物・線路・駅・踏切・電柱と電線・遠景
   - `train.glb`: 江ノ電 1000 形（2 両）／ `character.glb`: 20 代日本人男性（ボーン 56、Idle / Walk / Run / Sprint / Jump をベイク）

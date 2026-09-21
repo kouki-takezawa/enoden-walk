@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 const BASE = import.meta.env.BASE_URL;
 
@@ -136,9 +136,14 @@ function colored(geo, hex, jitter = 0) {
 }
 
 function treeGeometries() {
+  // smooth-shaded low-poly parts: weld the vertices, recompute the normals after the transform, then add the vertex colours
   const part = (geo, hex, m, jitter = 0.12) => {
-    let g = geo.index ? geo.toNonIndexed() : geo.clone();
+    let g = geo.clone();
+    g.deleteAttribute('uv');
+    g.deleteAttribute('normal');
+    g = mergeVertices(g);
     g.applyMatrix4(m);
+    g.computeVertexNormals();
     return colored(g, hex, jitter);
   };
   const T = (x, y, z) => new THREE.Matrix4().makeTranslation(x, y, z);
@@ -155,7 +160,7 @@ function treeGeometries() {
 export function makeTrees(data) {
   const group = new THREE.Group();
   const geos = treeGeometries();
-  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, flatShading: true });
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, flatShading: false });
   const byKind = [[], [], [], []];
   for (const t of data.trees) byKind[t[0]].push(t);
   const m4 = new THREE.Matrix4();
@@ -180,4 +185,38 @@ export function makeTrees(data) {
     group.add(im);
   });
   return group;
+}
+
+// ---------------------------------------------------------------------------------------------------- image based lighting
+/** Environment map from the same procedural sky (so the reflections match the sun): PMREM prefiltered, used for scene.environment. */
+export function makeEnvironment(renderer, sunDir) {
+  const envScene = new THREE.Scene();
+  const sky = makeSky(sunDir);
+  sky.scale.setScalar(50);
+  envScene.add(sky);
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const rt = pmrem.fromScene(envScene, 0.02);
+  pmrem.dispose();
+  return rt.texture;
+}
+
+/** PBR pass over the glTF materials that Blender exported: keep them physically plausible and give reflective ones the environment. */
+export function tunePBR(root) {
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of mats) {
+      if (!m || !m.isMeshStandardMaterial) continue;
+      m.roughness = Math.max(0.32, m.roughness);
+      if (m.metalness > 0.5) {
+        m.metalness = Math.min(m.metalness, 0.75);
+        m.envMapIntensity = 1.4;
+      } else if (m.transparent) {
+        m.envMapIntensity = 1.6;
+        m.roughness = Math.min(m.roughness, 0.12);
+      } else {
+        m.envMapIntensity = 0.7;
+      }
+    }
+  });
 }

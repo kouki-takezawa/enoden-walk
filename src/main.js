@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { makeLoaders, sunDirection, makeSky, makeSea, makeTrees } from './world.js';
+import { makeLoaders, sunDirection, makeSky, makeSea, makeTrees, makeEnvironment, tunePBR } from './world.js';
 import { Ground } from './ground.js';
 import { Player } from './player.js';
 import { Train } from './train.js';
@@ -14,10 +14,11 @@ const canvas = $('c');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.25;
+renderer.outputColorSpace = THREE.SRGBColorSpace;               // linear lighting -> sRGB display
+renderer.toneMapping = THREE.ACESFilmicToneMapping;               // filmic roll-off: no clipped highlights, richer colour
+renderer.toneMappingExposure = 1.15;
+renderer.shadowMap.enabled = true;                                // real-time shadows (sun + player-following shadow frustum)
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;                 // soft edges
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0xe9c6a0, 0.00085);
@@ -91,7 +92,9 @@ async function load() {
 
   // lights, sky, sea
   sunDir = sunDirection(meta);
-  scene.add(new THREE.HemisphereLight(0xffe6cc, 0x8a7560, 1.5));
+  scene.environment = makeEnvironment(renderer, sunDir);        // sky-based IBL: reflections + ambient gradient
+  scene.environmentIntensity = 0.55;
+  scene.add(new THREE.HemisphereLight(0xffe6cc, 0x8a7560, 0.6));
   sun = new THREE.DirectionalLight(0xffd6a8, 3.4);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
@@ -124,6 +127,7 @@ async function load() {
     const mats = Array.isArray(o.material) ? o.material : [o.material];
     for (const m of mats) if (m.transparent) m.depthWrite = false;
   });
+  tunePBR(worldRoot);
   scene.add(worldRoot);
   scene.add(makeTrees(trees));
 
