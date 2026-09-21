@@ -37,7 +37,13 @@ if (isTouch) document.body.classList.add('touch');
 
 // ---------------------------------------------------------------------------------------------------- renderer / scene
 const canvas = $('c');
-const renderer = new Renderer(canvas, preset, { govern: !params.has('nogov') });
+let renderer;
+try {
+  renderer = new Renderer(canvas, preset, { govern: !params.has('nogov') });
+} catch (err) {
+  $('loadtext').textContent = t('nowebgl');
+  throw err;
+}
 const gl = renderer.gl;
 const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0xe9c6a0, 0.00085);
@@ -392,6 +398,7 @@ const hooks = {
   capture: () => (wantShot = true),
   modal: (open) => {
     modalOpen = open;
+    input.enabled = started && !open; // while a dialog is open the keyboard belongs to it (Tab / Esc navigation)
     if (open) document.exitPointerLock?.();
   },
   changed: (key) => {
@@ -413,6 +420,7 @@ const hooks = {
 
 ui = new UI({ t, settings, hooks });
 input = new Input(canvas, settings, hooks);
+input.enabled = false; // until the walk starts (the title panel keeps normal keyboard navigation)
 $('fps').classList.toggle('hidden', !settings.fps);
 $('bRun').addEventListener('pointerdown', (e) => {
   e.preventDefault();
@@ -679,6 +687,7 @@ document.addEventListener('visibilitychange', () => {
 
 $('start').addEventListener('click', () => {
   started = true;
+  input.enabled = true;
   camSnap = true;
   $('loading').classList.add('hidden');
   $('hud').classList.remove('hidden');
