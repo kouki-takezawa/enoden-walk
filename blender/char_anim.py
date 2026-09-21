@@ -650,6 +650,23 @@ def export_web_character(arm, objs, path, log):
             if name == "Lips":
                 hexc = "#8A4B44"
             slot.material = mat(key + ("_lips" if name == "Lips" else ""), hexc, r, mt)
+    # bake the subdivision (the glTF exporter would otherwise ship the faceted base mesh): evaluate without the armature, keep the weights
+    for name, ob in objs.items():
+        sd = next((m for m in ob.modifiers if m.type == "SUBSURF"), None)
+        if sd is None:
+            continue
+        arm_mods = [m for m in ob.modifiers if m.type == "ARMATURE"]
+        for m in arm_mods:
+            m.show_viewport = False
+        dg = bpy.context.evaluated_depsgraph_get()
+        ev = ob.evaluated_get(dg)
+        me = bpy.data.meshes.new_from_object(ev, preserve_all_data_layers=True, depsgraph=dg)
+        ob.modifiers.remove(sd)
+        ob.data = me
+        for m in arm_mods:
+            m.show_viewport = True
+        for p_ in me.polygons:
+            p_.use_smooth = True
     for a in list(bpy.data.actions):
         if a.name not in ("Male_Idle", "Male_Walk", "Male_Run", "Male_Sprint", "Male_Jump"):
             bpy.data.actions.remove(a)
@@ -664,7 +681,8 @@ def export_web_character(arm, objs, path, log):
     want = {"filepath": path, "export_format": "GLB", "use_selection": True, "export_animations": True, "export_animation_mode": "ACTIONS",
             "export_apply": False, "export_yup": True, "export_texcoords": False, "export_normals": True, "export_image_format": "NONE",
             "export_materials": "EXPORT", "export_force_sampling": True, "export_optimize_animation_size": True, "export_skins": True,
-            "export_draco_mesh_compression_enable": False}
+            "export_draco_mesh_compression_enable": True, "export_draco_mesh_compression_level": 7, "export_draco_position_quantization": 14,
+            "export_draco_normal_quantization": 8, "export_draco_generic_quantization": 12}
     kw = {k: v for k, v in want.items() if k in valid}
     try:
         bpy.ops.export_scene.gltf(**kw)

@@ -1424,6 +1424,7 @@ HOUSES = []          # per house / apartment: footprint + eave data (filled by b
 HEDGES = []          # (x, y, height) evergreen shrubs along the lot fronts (consumed by build_vegetation)
 FOOTPRINTS = []      # (x0, x1, y0, y1, polygon) of every kept building (lanes / drops)
 WEB_TREES = []       # (kind, x, y, z, half width, height, rotation) of every tree / shrub stamp (web viewer instances them)
+WEB_LAMPS = []       # (x, y, z) of every street / pole lamp head (web viewer lights them at night)
 
 
 def _poly_area(pts):
@@ -2041,9 +2042,12 @@ def build_buildings(road_pts):
                 pts.append((px_, py_, pz_))
             base = mb.verts(pts)
             wa = dict(attrs)
+            uv_ = None
             if k_ == "w":
                 wa.update(wang=_wall_ang(ring), wsd=(zlib.crc32((b["id"] + str(wi)).encode()) % 1000) / 1000.0, bz0=zmin)
-            mb.face(range(base, base + len(pts)), 0 if k_ == "w" else 1, False, **wa)
+                ca_, sa_ = math.cos(wa["wang"]), math.sin(wa["wang"])
+                uv_ = [((q[0] - pts[0][0]) * ca_ + (q[1] - pts[0][1]) * sa_, q[2] - zmin) for q in pts]
+            mb.face(range(base, base + len(pts)), 0 if k_ == "w" else 1, False, uv=uv_, **wa)
 
         if pitched:
             c_, u_, v_, du, dv = rect
@@ -3516,6 +3520,7 @@ def build_poles(path):
             p1 = Vector((px, py, zt - 4.6)) + d + Vector((0, 0, 0.5))
             mb.cyl((px, py, zt - 4.6), (p1.x, p1.y, p1.z), 0.03, 0.03, 6, 1)
             mb.box((p1.x, p1.y, p1.z - 0.07), (0.50, 0.22, 0.09), 4, R)
+            WEB_LAMPS.append((p1.x, p1.y, p1.z - 0.2))
             mb.box((p1.x, p1.y, p1.z), (0.54, 0.26, 0.05), 5, R)
         return {"pos": Vector((px, py, zt)), "n": Vector((n.x, n.y, 0.0)), "z0": z0}
 
@@ -3686,6 +3691,7 @@ def build_streetlights():
         mb.cyl((x, -15.6, z0), (x, -15.6, z0 + 7.6), 0.085, 0.055, 10, 0)
         mb.cyl((x, -15.6, z0 + 7.5), (x, -13.9, z0 + 8.05), 0.03, 0.03, 6, 0)
         mb.box((x, -13.9, z0 + 7.98), (0.62, 0.26, 0.07), 1)
+        WEB_LAMPS.append((x, -13.9, z0 + 7.85))
         mb.box((x, -13.9, z0 + 7.93), (0.56, 0.22, 0.03), 2)
     mb.build("Streetlights_R134", coll("P2_Poles"), [MAT["MAT_Steel_Grey"], MAT["MAT_White_Panel"], MAT["MAT_Lamp_Warm"]])
 
@@ -4204,7 +4210,7 @@ def main():
         if HERE not in sys.path:
             sys.path.insert(0, HERE)
         import enoden_web_export as WE
-        WE.run(ARGS.web_export, FOOTPRINTS, WEB_TREES, CFG, log)
+        WE.run(ARGS.web_export, FOOTPRINTS, WEB_TREES, CFG, log, WEB_LAMPS)
         return
     log("scene built: %d objects, %d materials" % (len(bpy.data.objects), len(bpy.data.materials)))
 
