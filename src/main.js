@@ -158,9 +158,9 @@ const gltfLoader = makeLoaders();
 const parse = (buf) => new Promise((ok, err) => gltfLoader.parse(buf, `${BASE}models/`, ok, err));
 
 async function load() {
-  meta = await (await fetch(`${BASE}models/meta.json`)).json();
+  const M = (f) => `${BASE}models/${f}?v=${__BUILD__}`;
+  meta = await (await fetch(M('meta.json'))).json();
   progress('meta', 1);
-  const M = (f) => `${BASE}models/${f}`;
   const [gbuf, sbuf, obuf, trees, wbuf, tbuf, cbuf] = await Promise.all([
     fetchBuf('ground', M('ground.bin')),
     fetchBuf('surface', M('surface.bin')),

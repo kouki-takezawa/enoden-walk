@@ -1,6 +1,10 @@
 import { defineConfig } from 'vite';
 
+// model files keep their names, so the requests carry a build id: a redeploy can never be paired with stale cached data
+const BUILD = (process.env.VERCEL_GIT_COMMIT_SHA || Date.now().toString(36)).slice(0, 10);
+
 export default defineConfig({
+  define: { __BUILD__: JSON.stringify(BUILD) },
   build: {
     chunkSizeWarningLimit: 1500,
     target: 'es2020',
