@@ -69,6 +69,12 @@ function legMaterial(color, signOffset) {
 
 const WAYPOINT_NAMES = ['1号踏切', '鎌倉高校前駅', '海沿いの歩道', '国道134号'];
 const ANIM_LOD_DIST = 45; // beyond this, freeze the walk pose (still moves/faces correctly, just stops animating) — cheap and unnoticeable that far out
+// B5 profiling: each pedestrian is ~218k triangles / 20 draw calls (same rig as the player) — 6 of them is a real
+// chunk of the frame. frustumCulled stays off (three.js's default bounding sphere is computed from bind pose and
+// goes stale as bones animate, same reasoning as player.js), so distance is the only cheap way to drop the ones
+// that are too far to matter — well past ANIM_LOD_DIST, since a fully invisible pedestrian popping in is more
+// noticeable than a frozen-but-visible one.
+const VISIBLE_DIST = 90;
 
 /** A small wandering crowd: each pedestrian A*-paths (nav.js: findPath, the same routine the minimap guide uses)
  *  between a few fixed points of interest and loops. Each instance is a SkeletonUtils clone of one of a handful of
@@ -166,8 +172,9 @@ export class Pedestrians {
       const y = gy === gy ? gy : 0;
       p.model.position.set(p.pos.x, y, -p.pos.y);
       p.model.rotation.y = p.yaw;
-      const near = !refPos || Math.hypot(p.pos.x - refPos.x, -p.pos.y - refPos.z) < ANIM_LOD_DIST;
-      if (near && dt > 0) p.mixer.update(dt);
+      const dist = refPos ? Math.hypot(p.pos.x - refPos.x, -p.pos.y - refPos.z) : 0;
+      p.model.visible = dist < VISIBLE_DIST;
+      if (dt > 0 && dist < ANIM_LOD_DIST) p.mixer.update(dt);
     }
   }
 }
