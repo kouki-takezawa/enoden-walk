@@ -130,6 +130,7 @@ let sea;
 let glow;
 let pedestrians;
 let traffic;
+let carsG;
 let ui;
 let input;
 let ready = false;
@@ -155,7 +156,7 @@ const trainLookPos = new THREE.Vector3();
 
 // ---------------------------------------------------------------------------------------------------- loading
 // decoded sizes in bytes: progress is measured against them because the server compresses (content-length is the encoded size)
-const SIZES = { meta: 2400, ground: 492984, surface: 123246, solid: 123246, trees: 103893, world: 4097256, train: 271868, character: 852648 };
+const SIZES = { meta: 2400, ground: 492984, surface: 123246, solid: 123246, trees: 103893, world: 4097256, train: 271868, character: 852648, cars: 201536 };
 const TOTAL = Object.values(SIZES).reduce((a, b) => a + b, 0);
 const done = {};
 function progress(name, frac) {
@@ -197,7 +198,7 @@ async function load() {
   const M = (f) => `${BASE}models/${f}?v=${__BUILD__}`;
   meta = await (await fetch(M('meta.json'))).json();
   progress('meta', 1);
-  const [gbuf, sbuf, obuf, trees, wbuf, tbuf, cbuf] = await Promise.all([
+  const [gbuf, sbuf, obuf, trees, wbuf, tbuf, cbuf, carbuf] = await Promise.all([
     fetchBuf('ground', M('ground.bin')),
     fetchBuf('surface', M('surface.bin')),
     fetchBuf('solid', M('solid.bin')),
@@ -205,6 +206,7 @@ async function load() {
     fetchBuf('world', M('world.glb')),
     fetchBuf('train', M('train.glb')),
     fetchBuf('character', M('character.glb')),
+    fetchBuf('cars', M('cars.glb')),
   ]);
   $('loadtext').textContent = t('assembling');
   await new Promise((r) => setTimeout(r, 30));
@@ -214,7 +216,8 @@ async function load() {
   // the only way onto the platform is the ramp at its west end: make it a teleport spot too
   meta.poi.push({ name: 'ホーム入口（西のスロープ）', en: 'Platform entrance (west ramp)', x: meta.platform.x0 - 2.5, y: (meta.platform.y0 + meta.platform.y1) / 2 });
   ground.addTrees(trees.trees);
-  const [worldG, trainG, charG] = await Promise.all([parse(wbuf), parse(tbuf), parse(cbuf)]);
+  const [worldG, trainG, charG, carsGltf] = await Promise.all([parse(wbuf), parse(tbuf), parse(cbuf), parse(carbuf)]);
+  carsG = carsGltf;
 
   worldRoot = worldG.scene;
   tunePBR(worldRoot);
@@ -250,7 +253,7 @@ async function load() {
   scene.add(train.group);
   pedestrians = new Pedestrians(ground, meta, PEOPLE_COUNT[preset.detail] ?? 0);
   scene.add(pedestrians.group);
-  traffic = new Traffic(ground, meta, CAR_COUNT[preset.detail] ?? 0);
+  traffic = new Traffic(carsG, ground, meta, CAR_COUNT[preset.detail] ?? 0);
   scene.add(traffic.group);
   const sp = meta.spawn;
   player = new Player(charG, ground, { x: sp.x, z: -sp.y, yaw: Math.atan2(-sp.x, sp.y) });
@@ -324,7 +327,7 @@ function applyQuality(name) {
   pedestrians = new Pedestrians(ground, meta, PEOPLE_COUNT[preset.detail] ?? 0);
   scene.add(pedestrians.group);
   disposeGroup(traffic.group);
-  traffic = new Traffic(ground, meta, CAR_COUNT[preset.detail] ?? 0);
+  traffic = new Traffic(carsG, ground, meta, CAR_COUNT[preset.detail] ?? 0);
   scene.add(traffic.group);
   buildPointLights();
 }

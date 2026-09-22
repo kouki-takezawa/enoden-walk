@@ -705,7 +705,7 @@ def export_web_character(arm, objs, path, log, bake_dir=None):
             for slot, fm in zip(ob.material_slots, flat_mats):
                 slot.material = fm
         if paths:
-            _wire_baked_textures(ob.material_slots[0].material, paths)
+            bake_tex.wire_baked_textures(ob.material_slots[0].material, paths)
 
     for a in list(bpy.data.actions):
         if a.name not in ("Male_Idle", "Male_Walk", "Male_Run", "Male_Sprint", "Male_Jump"):
@@ -729,39 +729,6 @@ def export_web_character(arm, objs, path, log, bake_dir=None):
         log("web character glb: %s (%.2f MB)" % (path, os.path.getsize(path) / 1e6))
     except Exception as e:
         log("web character export failed:", e)
-
-
-def _wire_baked_textures(mat, paths):
-    """Adds permanent Image Texture nodes to `mat` (one of export_web_character()'s flat W_ materials) for
-    whichever of diffuse/roughness/normal actually baked, wired into its Principled BSDF. Unlike the temporary
-    nodes bake_to_uv() creates and removes, these stay — this is what the glTF exporter picks up."""
-    nt = mat.node_tree
-    bsdf = next(n for n in nt.nodes if n.type == "BSDF_PRINCIPLED")
-    x = bsdf.location.x - 320
-    if "diffuse" in paths:
-        img = bpy.data.images.load(paths["diffuse"])
-        img.colorspace_settings.name = "sRGB"
-        n = nt.nodes.new("ShaderNodeTexImage")
-        n.image = img
-        n.location = (x, bsdf.location.y + 200)
-        nt.links.new(n.outputs["Color"], bsdf.inputs["Base Color"])
-    if "roughness" in paths:
-        img = bpy.data.images.load(paths["roughness"])
-        img.colorspace_settings.name = "Non-Color"
-        n = nt.nodes.new("ShaderNodeTexImage")
-        n.image = img
-        n.location = (x, bsdf.location.y)
-        nt.links.new(n.outputs["Color"], bsdf.inputs["Roughness"])
-    if "normal" in paths:
-        img = bpy.data.images.load(paths["normal"])
-        img.colorspace_settings.name = "Non-Color"
-        n = nt.nodes.new("ShaderNodeTexImage")
-        n.image = img
-        n.location = (x, bsdf.location.y - 200)
-        nm = nt.nodes.new("ShaderNodeNormalMap")
-        nm.location = (x + 160, bsdf.location.y - 200)
-        nt.links.new(n.outputs["Color"], nm.inputs["Color"])
-        nt.links.new(nm.outputs["Normal"], bsdf.inputs["Normal"])
 
 
 def render_sheet(arm, act, frames, outpath, cam, log, res=(300, 400)):

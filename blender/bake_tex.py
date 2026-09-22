@@ -178,3 +178,36 @@ def bake_tile(mat, outdir, name_prefix, tile_m=2.0, resolution=1024, passes=("di
         bpy.data.objects.remove(ob, do_unlink=True)
         bpy.data.meshes.remove(mesh)
     return out
+
+
+def wire_baked_textures(mat, paths):
+    """Adds permanent Image Texture nodes to `mat` for whichever of diffuse/roughness/normal actually baked,
+    wired into its Principled BSDF. Unlike the temporary nodes bake_to_uv() creates and removes, these stay —
+    this is what the glTF exporter picks up. Shared by the character (char_anim.py) and car (cars.py) pipelines."""
+    nt = mat.node_tree
+    bsdf = next(n for n in nt.nodes if n.type == "BSDF_PRINCIPLED")
+    x = bsdf.location.x - 320
+    if "diffuse" in paths:
+        img = bpy.data.images.load(paths["diffuse"])
+        img.colorspace_settings.name = "sRGB"
+        n = nt.nodes.new("ShaderNodeTexImage")
+        n.image = img
+        n.location = (x, bsdf.location.y + 200)
+        nt.links.new(n.outputs["Color"], bsdf.inputs["Base Color"])
+    if "roughness" in paths:
+        img = bpy.data.images.load(paths["roughness"])
+        img.colorspace_settings.name = "Non-Color"
+        n = nt.nodes.new("ShaderNodeTexImage")
+        n.image = img
+        n.location = (x, bsdf.location.y)
+        nt.links.new(n.outputs["Color"], bsdf.inputs["Roughness"])
+    if "normal" in paths:
+        img = bpy.data.images.load(paths["normal"])
+        img.colorspace_settings.name = "Non-Color"
+        n = nt.nodes.new("ShaderNodeTexImage")
+        n.image = img
+        n.location = (x, bsdf.location.y - 200)
+        nm = nt.nodes.new("ShaderNodeNormalMap")
+        nm.location = (x + 160, bsdf.location.y - 200)
+        nt.links.new(n.outputs["Color"], nm.inputs["Color"])
+        nt.links.new(nm.outputs["Normal"], bsdf.inputs["Normal"])
