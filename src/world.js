@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { makeSky } from './sky.js';
-import { patchBuildingWall, patchTerrain, patchAsphalt, patchDeck, farLandMaterial } from './fx.js';
+import { patchBuildingWall, patchTerrain, patchAsphalt, patchDeck, patchSkin, patchHair, patchFabric, farLandMaterial } from './fx.js';
 
 const BASE = import.meta.env.BASE_URL;
 
@@ -84,6 +84,21 @@ export function styleWorld(root, preset) {
       else if (m.name === 'W_MAT_Platform_Top') patchDeck(m, 'top', preset.bump);
       else if (m.name === 'W_MAT_Tactile_Yellow') patchDeck(m, 'yellow', preset.bump);
       else if (m.name === 'W_MAT_Wood_Post' || m.name === 'W_MAT_Wood_Dark') patchDeck(m, 'wood', preset.bump);
+    }
+  });
+}
+
+/** Character shader patches (skin / hair / fabric): same "port the Blender pattern to JS" trick as styleWorld,
+ *  since the web export flattens the character's rich procedural materials (subsurface skin, per-strand hair
+ *  tint, fabric sheen) to flat colours the same way it does for the world's materials. */
+export function styleCharacter(model, preset) {
+  model.traverse((o) => {
+    if (!o.isMesh && !o.isSkinnedMesh) return;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of mats) {
+      if (m.name === 'W_MAT_Skin_Body' || m.name === 'W_MAT_Skin_Head' || m.name === 'W_MAT_Skin_Head_lips') patchSkin(m, preset.detail, preset.bump);
+      else if (m.name === 'W_MAT_Hair') patchHair(m, preset.detail);
+      else if (m.name === 'W_MAT_Tee' || m.name === 'W_MAT_TeeRib' || m.name === 'W_MAT_Chino') patchFabric(m, preset.detail, preset.bump);
     }
   });
 }

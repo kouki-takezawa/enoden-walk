@@ -21,7 +21,7 @@ import { StepFx } from './steps.js';
 import { Guide, makeBeacon } from './guide.js';
 
 installFog(); // must run before any material compiles
-import { makeLoaders, makeEnvironment, tunePBR, styleWorld } from './world.js';
+import { makeLoaders, makeEnvironment, tunePBR, styleWorld, styleCharacter } from './world.js';
 
 const BASE = import.meta.env.BASE_URL;
 const $ = (id) => document.getElementById(id);
@@ -239,6 +239,7 @@ async function load() {
   buildPointLights();
 
   train = new Train(trainG, worldRoot, meta);
+  train.style(preset);
   scene.add(train.group);
   const sp = meta.spawn;
   player = new Player(charG, ground, { x: sp.x, z: -sp.y, yaw: Math.atan2(-sp.x, sp.y) });
@@ -249,6 +250,7 @@ async function load() {
     stepFx.step(surf, speed, player);
   };
   player.setDetail(preset.detail);
+  styleCharacter(player.model, preset);
   scene.add(player.root);
   camYaw = player.yaw + Math.PI;
 
@@ -302,6 +304,8 @@ function applyQuality(name) {
   scene.add(treesGroup);
   updateTreeLOD(treesGroup, player.pos.x, player.pos.z, preset.shadowRange);
   player.setDetail(preset.detail);
+  styleCharacter(player.model, preset);
+  train.style(preset);
   disposeGroup(sea);
   sea = makeSea(ground, meta.sea_level, preset.seaDepth, preset.waves);
   scene.add(sea);

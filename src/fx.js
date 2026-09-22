@@ -266,6 +266,103 @@ export function patchDeck(mat, kind, bump) {
   mat.needsUpdate = true;
 }
 
+/** Character / train materials have no useful UV (the character body has none at all; the wall/terrain patches above
+ *  use world position instead, which is right for fixed scenery but would make skin blemishes or fabric weave swim
+ *  across the body as the character walks and turns). These patches key noise off the *bind-pose local* position
+ *  instead — `transformed` at `#include <begin_vertex>`, before skinning is applied — so the pattern stays put on
+ *  the mesh regardless of where in the world (or what animation pose) it currently is. */
+const LOCAL_POS = ['varying vec3 vLocalPos;', 'vLocalPos = transformed;', 'varying vec3 vLocalPos;'];
+
+/** skin: faint warm/cool blotching + pore-scale roughness, plus a cheap fresnel "warm edge glow" standing in for
+ *  subsurface scattering (a full SSS BRDF would need patching three.js's lighting chunk; this fakes the same read —
+ *  light bleeding through thin tissue at grazing/backlit angles — far more cheaply, and suits this scene's frequent
+ *  low, warm dusk sun especially well). `bump` (ultra preset only) adds pore-scale normal perturbation. */
+export function patchSkin(mat, detail, bump) {
+  mat.customProgramCacheKey = () => `skin${detail}${bump ? 'b' : ''}`;
+  mat.onBeforeCompile = (shader) => {
+    inject(shader, ...LOCAL_POS, [
+      [
+        '#include <color_fragment>',
+        detail > 0
+          ? `{
+          float blot = fxNoise(vLocalPos.xz * 3.2 + vLocalPos.y * 2.4);
+          float fine = fxNoise(vLocalPos.xz * 12.0 + 5.0);
+          diffuseColor.rgb *= 0.94 + 0.09 * fine;
+          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.07, 0.93, 0.89), smoothstep(0.52, 0.85, blot) * 0.55);
+        }`
+          : '',
+      ],
+      ['#include <roughnessmap_fragment>', 'roughnessFactor = clamp(roughnessFactor + (fxRoughNoise(vLocalPos, 22.0) - 0.5) * 0.10, 0.30, 0.85);'],
+      ...(bump ? [['#include <normal_fragment_maps>', 'normal = fxBump(normal, vLocalPos, fxNoise2(vLocalPos.xz * 38.0 + vLocalPos.y * 26.0), 0.05);']] : []),
+      [
+        '#include <emissivemap_fragment>',
+        '{ float fres = pow(1.0 - clamp(dot(normalize(normal), normalize(vViewPosition)), 0.0, 1.0), 3.0); totalEmissiveRadiance += vec3(0.55, 0.16, 0.09) * fres * 0.09; }',
+      ],
+    ]);
+  };
+  mat.needsUpdate = true;
+}
+
+/** hair: per-strand-ish colour variation (warm brown highlights over the near-black base) and roughness streaking,
+ *  so it reads as hair instead of a flat dark cap. */
+export function patchHair(mat, detail) {
+  mat.customProgramCacheKey = () => `hair${detail}`;
+  mat.onBeforeCompile = (shader) => {
+    inject(shader, ...LOCAL_POS, [
+      [
+        '#include <color_fragment>',
+        detail > 0
+          ? `{
+          float strand = fxNoise(vLocalPos.xz * 60.0 + vLocalPos.y * 44.0);
+          float hi = smoothstep(0.60, 0.90, strand);
+          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.9, 1.5, 1.15), hi * 0.30);
+          diffuseColor.rgb *= 0.86 + 0.26 * fxNoise(vLocalPos.xz * 13.0 + 3.0);
+        }`
+          : '',
+      ],
+      ['#include <roughnessmap_fragment>', 'roughnessFactor = clamp(roughnessFactor + (fxNoise(vLocalPos.xz * 50.0 + vLocalPos.y * 30.0) - 0.5) * 0.28, 0.18, 0.85);'],
+    ]);
+  };
+  mat.needsUpdate = true;
+}
+
+/** clothing (tee / chino): weave-scale normal perturbation (`bump`, ultra only) + subtle dye/wash colour variation. */
+export function patchFabric(mat, detail, bump) {
+  mat.customProgramCacheKey = () => `fabric${detail}${bump ? 'b' : ''}`;
+  mat.onBeforeCompile = (shader) => {
+    inject(shader, ...LOCAL_POS, [
+      ['#include <color_fragment>', detail > 0 ? 'diffuseColor.rgb *= 0.92 + 0.14 * fxNoise(vLocalPos.xz * 5.0 + vLocalPos.y * 4.0);' : ''],
+      ['#include <roughnessmap_fragment>', 'roughnessFactor = clamp(roughnessFactor + (fxRoughNoise(vLocalPos, 18.0) - 0.5) * 0.10, 0.55, 0.98);'],
+      ...(bump ? [['#include <normal_fragment_maps>', 'normal = fxBump(normal, vLocalPos, fxNoise2(vLocalPos.xz * 70.0 + vLocalPos.y * 55.0), 0.10);']] : []),
+    ]);
+  };
+  mat.needsUpdate = true;
+}
+
+/** train livery: the same "dust film near the sill, faint wear" pattern the Blender-side MAT_Enoden_Green / _Cream
+ *  materials already model (see build_materials() in enoden_kamakurakokomae.py) — ported to JS since the web export
+ *  discards the procedural node graph and left the livery flat. `sill` biases the grime toward the bottom edge. */
+export function patchTrainLivery(mat, detail, sill) {
+  mat.customProgramCacheKey = () => `livery${detail}${sill ? 's' : ''}`;
+  mat.onBeforeCompile = (shader) => {
+    inject(shader, ...LOCAL_POS, [
+      [
+        '#include <color_fragment>',
+        detail > 0
+          ? `{
+          float wear = fxNoise(vLocalPos.xz * 0.35 + vLocalPos.y * 0.6);
+          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.72, 0.72, 0.70), smoothstep(0.55, 0.90, wear) * 0.30);
+          diffuseColor.rgb *= 0.95 + 0.08 * fxNoise(vLocalPos.xz * 4.0 + 7.0);
+          ${sill ? 'diffuseColor.rgb *= 1.0 - 0.22 * smoothstep(1.1, 0.85, vLocalPos.y) * (0.5 + 0.5 * fxNoise(vLocalPos.xz * 0.8 + 2.0));' : ''}
+        }`
+          : '',
+      ],
+      ['#include <roughnessmap_fragment>', 'roughnessFactor = clamp(roughnessFactor + (fxRoughNoise(vLocalPos, 2.0) - 0.5) * 0.10, 0.08, 0.6);'],
+    ]);
+  };
+  mat.needsUpdate = true;
+}
+
 /** far land (Enoshima, headlands, Hakone, Fuji): hazy blue silhouettes lighter with height, snow on Fuji */
 export function farLandMaterial() {
   const mat = new THREE.MeshBasicMaterial({ color: 0x8b98ad, fog: false });
