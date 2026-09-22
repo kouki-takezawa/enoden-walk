@@ -27,6 +27,7 @@
     <div class="bar"><div id="barfill"></div></div>
     <p id="loadtext" data-i18n="loading">読み込み中…</p>
     <button id="start" disabled data-i18n="start">散歩をはじめる</button>
+    <button id="retry" class="hidden" data-i18n="retry">やり直す</button>
     <div id="helpbody" class="keys"></div>
     <p class="credit" data-i18n-html="credit"></p>
   </div>
@@ -34,15 +35,15 @@
   <div id="hud" class="hidden">
     <div id="where"></div>
     <div id="toolbar">
-      <button id="bTime" aria-label="time of day">🌇</button>
-      <button id="bSpots" aria-label="spots">📍</button>
-      <button id="bPhoto" aria-label="photo mode">📷</button>
-      <button id="bSet" aria-label="settings">⚙</button>
-      <button id="bHelp" aria-label="help">？</button>
+      <button id="bTime" aria-label="time of day"></button>
+      <button id="bSpots" aria-label="spots"></button>
+      <button id="bPhoto" aria-label="photo mode"></button>
+      <button id="bSet" aria-label="settings"></button>
+      <button id="bHelp" aria-label="help"></button>
     </div>
     <div id="msg" role="status" aria-live="polite"></div>
     <div id="prompt" class="hidden" role="status" aria-live="polite"></div>
-    <div id="trainbox"><span id="trainicon">🚃</span><span id="traintext"></span></div>
+    <div id="trainbox"><span id="trainicon"></span><span id="traintext"></span></div>
     <div id="quick"><button id="bGoPf" class="hidden"></button><button id="bCall" class="hidden"></button></div>
     <div id="navbar" class="hidden"><span id="navArrow" aria-hidden="true">▲</span><span id="navText"></span><button id="navAuto"></button><button id="navStop">✕</button></div>
     <div id="mapwrap"><canvas id="map" width="176" height="176"></canvas><span id="mapN">N</span></div>
@@ -53,15 +54,21 @@
   <div id="touch" class="hidden">
     <div id="stick"><div id="knob"></div></div>
     <div id="btns">
-      <button id="bBoard" class="hidden">🚃</button>
-      <button id="bRun">走る</button>
+      <button id="bBoard" class="hidden"></button>
       <button id="bJump">ジャンプ</button>
     </div>
   </div>
+  <div id="tutorial" class="hidden"><div class="tutarrow"></div><p data-i18n="tutorial_text"></p></div>
 
   <div id="photo" class="hidden"></div>
+  <div id="mapOverlay" class="hidden"><canvas id="mapBig" width="340" height="340"></canvas><button id="mapOverlayClose" class="close" aria-label="close">✕</button></div>
   <div id="modal" class="hidden"></div>
   <div id="fade"></div>
+  <div id="installBanner" class="hidden" role="status">
+    <span id="installText"></span>
+    <button id="installBtn" class="hidden" data-i18n="install_btn"></button>
+    <button id="installDismiss" aria-label="dismiss">✕</button>
+  </div>
 
   <script type="module" src="/src/main.js"></script>
 </body>

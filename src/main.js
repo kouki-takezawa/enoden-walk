@@ -30,6 +30,14 @@ const ZERO = { x: 0, y: 0, run: false, sprint: false };
 const UP = new THREE.Vector3(0, 1, 0);
 const TIMES = ['day', 'dusk', 'night'];
 const isTouch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+/** short taptic buzz for jump / alarm / train hit; a no-op where Vibration API isn't available (iOS Safari) */
+const vibrate = (pattern) => {
+  try {
+    navigator.vibrate?.(pattern);
+  } catch {
+    /* unsupported */
+  }
+};
 
 // ---------------------------------------------------------------------------------------------------- settings
 const params = new URLSearchParams(location.search);
@@ -43,6 +51,7 @@ const resolveLevel = () => (PRESETS[settings.quality] ? settings.quality : autoP
 let level = resolveLevel();
 let preset = PRESETS[level];
 if (isTouch) document.body.classList.add('touch');
+document.body.dataset.handed = settings.handed;
 
 // ---------------------------------------------------------------------------------------------------- renderer / scene
 const canvas = $('c');
@@ -436,7 +445,11 @@ async function share() {
 }
 
 const hooks = {
-  jump: () => !isBlocked() && player.jump(),
+  jump: () => {
+    if (isBlocked()) return;
+    player.jump();
+    vibrate(15);
+  },
   board: toggleBoard,
   photo: togglePhoto,
   mute: () => {
@@ -451,7 +464,17 @@ const hooks = {
     camYaw = player.yaw + Math.PI;
   },
   escape: () => photo && togglePhoto(),
-  stick: (a, x, y, dx, dy) => ui.stick(a, x, y, dx, dy),
+  stick: (a, x, y, dx, dy) => {
+    if (a && !$('tutorial').classList.contains('hidden')) {
+      $('tutorial').classList.add('hidden');
+      try {
+        localStorage.setItem('enoden-walk.tutorialSeen.v1', '1');
+      } catch {
+        /* private mode: ignore */
+      }
+    }
+    ui.stick(a, x, y, dx, dy);
+  },
   autoWalk: () => {
     if (isBlocked() || player.riding) return;
     autoFwd = !autoFwd;
@@ -481,6 +504,7 @@ const hooks = {
     if (train.state !== 'wait') return;
     train.timer = Math.min(train.timer, 0.3);
     ui.showMsg(t('train_called'), 2400);
+    vibrate(20);
   },
   navAuto: () => {
     if (!guide.active) return;
@@ -521,15 +545,10 @@ const hooks = {
   },
 };
 
-ui = new UI({ t, settings, hooks });
+ui = new UI({ t, settings, hooks, touch: isTouch });
 input = new Input(canvas, settings, hooks);
 input.enabled = false; // until the walk starts (the title panel keeps normal keyboard navigation)
 $('fps').classList.toggle('hidden', !settings.fps);
-$('bRun').addEventListener('pointerdown', (e) => {
-  e.preventDefault();
-  input.touch.run = !input.touch.run;
-  $('bRun').classList.toggle('on', input.touch.run);
-});
 $('bJump').addEventListener('pointerdown', (e) => {
   e.preventDefault();
   hooks.jump();
@@ -548,7 +567,10 @@ let pushMsg = false;
 let wasAlarm = false;
 function crossingRules(dt) {
   const p = player.pos;
-  if (train.alarm && !wasAlarm) ui.showMsg(t('alarm'), 3000);
+  if (train.alarm && !wasAlarm) {
+    ui.showMsg(t('alarm'), 3000);
+    vibrate([40, 60, 40, 60, 40]);
+  }
   wasAlarm = train.alarm;
   if (train.hits(p)) {
     // knocked back to the nearer verge instead of being sent home
@@ -557,6 +579,7 @@ function crossingRules(dt) {
     if (ground.walkable(p.x, z) && !ground.isSolid(p.x, z)) player.teleport(p.x, z, player.yaw);
     else player.teleport(meta.spawn.x, -meta.spawn.y, player.yaw);
     ui.showMsg(t('hit'), 3200);
+    vibrate(120);
     return;
   }
   if (train.alarm && Math.abs(p.x) < 4.2 && Math.abs(p.z) < 3.6) {
@@ -969,7 +992,17 @@ $('start').addEventListener('click', () => {
   camSnap = true;
   $('loading').classList.add('hidden');
   $('hud').classList.remove('hidden');
-  if (isTouch) $('touch').classList.remove('hidden');
+  $('installBanner').classList.add('hidden'); // avoid covering the in-game toolbar; it only makes sense on the title screen
+  if (isTouch) {
+    $('touch').classList.remove('hidden');
+    let tutorialSeen = false;
+    try {
+      tutorialSeen = !!localStorage.getItem('enoden-walk.tutorialSeen.v1');
+    } catch {
+      /* private mode: ignore */
+    }
+    if (!tutorialSeen) $('tutorial').classList.remove('hidden');
+  }
   sound.volume = settings.volume;
   sound.muted = settings.muted;
   sound.announceOn = settings.announce;
@@ -986,6 +1019,8 @@ requestAnimationFrame((n) => {
 load().catch((e) => {
   console.error(e);
   $('loadtext').textContent = `${t('failed')}: ${e.message}`;
+  $('retry').classList.remove('hidden');
+  $('retry').onclick = () => location.reload();
 });
 
 // debug / test handle
@@ -1021,6 +1056,7 @@ window.__enoden = {
   U,
   get guide() { return guide; },
   hooks,
+  get camYaw() { return camYaw; },
   /** advance the walking simulation without rendering (tests) */
   sim: (dt, cmd = ZERO) => {
     train.update(dt, tod.night, tod.cur.glow);
@@ -1033,3 +1069,43 @@ window.__enoden = {
 
 // model files are addressed by build id, so a cache-first service worker can never serve stale data
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register(`${BASE}sw.js`).catch(() => {});
+
+// ---------------------------------------------------------------------------------------------------- "add to home screen" banner
+const INSTALL_DISMISSED_KEY = 'enoden-walk.installDismissed.v1';
+const alreadyStandalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+let deferredInstallEvent = null;
+function dismissInstallBanner() {
+  $('installBanner').classList.add('hidden');
+  try {
+    localStorage.setItem(INSTALL_DISMISSED_KEY, '1');
+  } catch {
+    /* private mode: ignore */
+  }
+}
+if (!alreadyStandalone) {
+  let dismissed = false;
+  try {
+    dismissed = !!localStorage.getItem(INSTALL_DISMISSED_KEY);
+  } catch {
+    /* private mode: ignore */
+  }
+  if (!dismissed) {
+    addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredInstallEvent = e;
+      $('installText').textContent = t('install_hint');
+      $('installBtn').classList.remove('hidden');
+      $('installBanner').classList.remove('hidden');
+    });
+    if (/iPad|iPhone|iPod/.test(navigator.userAgent)) {
+      // iOS Safari never fires beforeinstallprompt; show a static how-to instead
+      $('installText').textContent = t('install_hint_ios');
+      $('installBanner').classList.remove('hidden');
+    }
+  }
+}
+$('installBtn').onclick = () => {
+  deferredInstallEvent?.prompt();
+  dismissInstallBanner();
+};
+$('installDismiss').onclick = dismissInstallBanner;

@@ -8,7 +8,7 @@ export class Input {
     this.s = settings; // live reference: sens / invertY / viewMode
     this.hooks = hooks; // { jump, board, photo, mute, help, cycleTime, toggleMenu, recenter, escape, stick }
     this.keys = {};
-    this.touch = { x: 0, y: 0, run: false };
+    this.touch = { x: 0, y: 0 };
     this.pad = { x: 0, y: 0, run: false, sprint: false };
     this.look = { dx: 0, dy: 0 }; // accumulated look delta (radians), drained by the camera
     this.zoom = 0; // accumulated zoom delta
@@ -19,6 +19,8 @@ export class Input {
     this.stickOrigin = null;
     this.camPointers = new Map();
     this.pinch = null;
+    this.tapDown = null; // { id, t, x, y, moved } for the look-zone finger currently down
+    this.lastTap = null; // { t, x, y } of the last completed quick tap, for double-tap-to-recenter
     this._bind();
   }
 
@@ -108,12 +110,14 @@ export class Input {
       const [id, p] = [...this.camPointers][0];
       this.pinch = { a: id, b: e.pointerId, d: Math.hypot(p.x - e.clientX, p.y - e.clientY), pa: p, pb: { x: e.clientX, y: e.clientY } };
     }
-    if (e.clientX < w * 0.45 && this.stickId === null && !e.target.closest?.('#btns')) {
+    const stickZone = this.s.handed === 'left' ? e.clientX > w * 0.55 : e.clientX < w * 0.45;
+    if (stickZone && this.stickId === null && !e.target.closest?.('#btns')) {
       this.stickId = e.pointerId;
       this.stickOrigin = { x: e.clientX, y: e.clientY };
       this.hooks.stick?.(true, e.clientX, e.clientY, 0, 0);
       this.canvas.setPointerCapture(e.pointerId);
     } else {
+      if (this.camPointers.size === 0) this.tapDown = { id: e.pointerId, t: performance.now(), x: e.clientX, y: e.clientY, moved: false };
       this.camPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       this.canvas.setPointerCapture(e.pointerId);
     }
@@ -125,7 +129,7 @@ export class Input {
       let dx = e.clientX - o.x;
       let dy = e.clientY - o.y;
       const m = Math.hypot(dx, dy);
-      const lim = 56;
+      const lim = clamp(innerWidth * 0.14, 44, 72);
       if (m > lim) {
         dx = (dx / m) * lim;
         dy = (dy / m) * lim;
@@ -137,6 +141,7 @@ export class Input {
     }
     const p = this.camPointers.get(e.pointerId);
     if (!p) return;
+    if (this.tapDown && e.pointerId === this.tapDown.id && Math.hypot(e.clientX - this.tapDown.x, e.clientY - this.tapDown.y) > 10) this.tapDown.moved = true;
     if (this.pinch && (e.pointerId === this.pinch.a || e.pointerId === this.pinch.b)) {
       const pa = this.camPointers.get(this.pinch.a);
       const pb = this.camPointers.get(this.pinch.b);
@@ -166,6 +171,17 @@ export class Input {
       this.hooks.stick?.(false, 0, 0, 0, 0);
     }
     if (this.pinch && (e.pointerId === this.pinch.a || e.pointerId === this.pinch.b)) this.pinch = null;
+    if (this.tapDown && e.pointerId === this.tapDown.id) {
+      const { moved, t, x, y } = this.tapDown;
+      this.tapDown = null;
+      if (!moved && performance.now() - t < 250) {
+        const last = this.lastTap;
+        if (last && performance.now() - last.t < 350 && Math.hypot(x - last.x, y - last.y) < 30) {
+          this.hooks.recenter?.();
+          this.lastTap = null;
+        } else this.lastTap = { t: performance.now(), x, y };
+      }
+    }
   }
 
   // ---- gamepad (polled once per frame)
@@ -212,7 +228,7 @@ export class Input {
       x,
       y,
       // a floating stick pushed to its very end also runs
-      run: !!(k.ShiftLeft || k.ShiftRight) || this.touch.run || this.pad.run || Math.hypot(this.touch.x, this.touch.y) > 0.94,
+      run: !!(k.ShiftLeft || k.ShiftRight) || this.pad.run || Math.hypot(this.touch.x, this.touch.y) > 0.94,
       sprint: !!k.KeyR || this.pad.sprint,
     };
   }

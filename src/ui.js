@@ -1,20 +1,25 @@
 // HUD, menus, minimap, photo mode, i18n.  Pure DOM; main.js feeds it the state every frame.
 import { SEA_BLOCK } from './ground.js';
+import { ICONS, timeIcon } from './icons.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
 export class UI {
-  constructor({ t, settings, hooks }) {
+  constructor({ t, settings, hooks, touch = false }) {
     this.t = t;
     this.s = settings;
     this.hooks = hooks;
+    this.touch = touch;
     this.meta = { poi: [] };
     this.ground = null;
     this.msgTimer = 0;
+    this.msgBusy = false;
+    this.msgQueue = [];
     this.lastWhere = '';
     this.lastTrain = '';
     this.mapBase = null;
+    this.mapOverlayOpen = false;
     this.modalOpen = null;
     this.photo = false;
     this.fpsAcc = 0;
@@ -39,18 +44,25 @@ export class UI {
     document.querySelectorAll('[data-i18n-html]').forEach((e) => (e.innerHTML = t(e.dataset.i18nHtml)));
     document.querySelectorAll('.langsw button').forEach((b) => b.classList.toggle('on', b.dataset.lang === this.s.lang));
     $('helpbody').innerHTML = this.helpHTML();
-    $('bRun').textContent = t('runKey');
     $('bJump').textContent = t('jumpKey');
     $('help').textContent = t('helpShort');
     for (const [id, key] of [['bTime', 'time'], ['bSpots', 'spots'], ['bPhoto', 'photo'], ['bSet', 'settings'], ['bHelp', 'help']]) $(id).setAttribute('aria-label', t(key));
+    $('bSpots').innerHTML = ICONS.pin;
+    $('bPhoto').innerHTML = ICONS.camera;
+    $('bSet').innerHTML = ICONS.gear;
+    $('bHelp').innerHTML = ICONS.help;
+    $('bBoard').innerHTML = ICONS.train;
+    $('trainicon').innerHTML = ICONS.train;
     $('mapN').textContent = t('north');
-    $('bGoPf').textContent = t('go_platform');
-    $('bCall').textContent = t('call_train');
+    $('bGoPf').innerHTML = `${ICONS.train}<span>${esc(t('go_platform'))}</span>`;
+    $('bCall').innerHTML = `${ICONS.bell}<span>${esc(t('call_train'))}</span>`;
     $('navStop').setAttribute('aria-label', t('nav_stop'));
     $('navStop').title = t('nav_stop');
     $('mapwrap').title = t('map_hint');
     $('mapwrap').setAttribute('aria-label', t('map_hint'));
+    $('mapOverlayClose').setAttribute('aria-label', t('close'));
     this.lastNav = '';
+    this.lastNavAuto = undefined;
     this.lastWhere = '';
     this.lastTrain = '';
     if (this.modalOpen) this.openModal(this.modalOpen);
@@ -59,20 +71,28 @@ export class UI {
   helpHTML() {
     const t = this.t;
     const row = (k, d) => `<div class="krow"><span>${k}</span><span>${d}</span></div>`;
-    return [
+    const mapRow = row(t('mapKey'), t('mapKeyDesc'));
+    const keyboardRows = [
       row('<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / <kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd>', t('moveKeys')),
       row('<kbd>Shift</kbd>', t('runKey')),
       row('<kbd>R</kbd>', t('sprintKey')),
       row('<kbd>Space</kbd>', t('jumpKey')),
       row('<kbd>F</kbd>', t('autowalkKey')),
-      row(t('mapKey'), t('mapKeyDesc')),
       row(this.s.lang === 'ja' ? 'ドラッグ / ホイール' : 'Drag / wheel', t('viewKey')),
       row('<kbd>C</kbd>', t('recenterKey')),
       row('<kbd>E</kbd>', t('boardKey')),
       row('<kbd>T</kbd> / <kbd>P</kbd> / <kbd>M</kbd> / <kbd>Tab</kbd>', `${t('time')} / ${t('photoKey')} / ${t('soundKey')} / ${t('spots')}`),
       row('<kbd>H</kbd> / <kbd>？</kbd>', t('helpKey')),
-      `<div class="dim">${esc(t('gamepad'))}<br>${esc(t('touchHint'))}</div>`,
     ].join('');
+    // touch devices care about the touch hint and the minimap tap first; keyboard/gamepad bindings are secondary, tucked into a disclosure
+    if (this.touch) {
+      return [
+        `<div class="touchhint">${esc(t('touchHint'))}</div>`,
+        mapRow,
+        `<details class="kbdetails"><summary>${this.s.lang === 'ja' ? 'キーボード / ゲームパッドの操作' : 'Keyboard / gamepad controls'}</summary>${keyboardRows}<div class="dim">${esc(t('gamepad'))}</div></details>`,
+      ].join('');
+    }
+    return [keyboardRows, mapRow, `<div class="dim">${esc(t('gamepad'))}<br>${esc(t('touchHint'))}</div>`].join('');
   }
 
   // ---------------------------------------------------------------------------------------------- wiring
@@ -95,10 +115,34 @@ export class UI {
       h.board();
     });
     $('mapwrap').onclick = (e) => {
+      if (this._mapLongPressed) {
+        this._mapLongPressed = false;
+        return;
+      }
       const r = $('mapwrap').getBoundingClientRect();
       const u = ((e.clientX - r.left) / r.width) * 176;
       const v = ((e.clientY - r.top) / r.height) * 176;
       if ((u - 88) ** 2 + (v - 88) ** 2 < 86 * 86) h.mapTap(u, v);
+    };
+    // long-press the minimap to open the enlarged overlay (a plain tap still walks there, as before)
+    let mapPressTimer = 0;
+    let mapPressStart = null;
+    $('mapwrap').addEventListener('pointerdown', (e) => {
+      mapPressStart = { x: e.clientX, y: e.clientY };
+      clearTimeout(mapPressTimer);
+      mapPressTimer = setTimeout(() => {
+        this._mapLongPressed = true;
+        this.toggleMapOverlay(true);
+      }, 480);
+    });
+    $('mapwrap').addEventListener('pointermove', (e) => {
+      if (mapPressStart && Math.hypot(e.clientX - mapPressStart.x, e.clientY - mapPressStart.y) > 10) clearTimeout(mapPressTimer);
+    });
+    $('mapwrap').addEventListener('pointerup', () => clearTimeout(mapPressTimer));
+    $('mapwrap').addEventListener('pointercancel', () => clearTimeout(mapPressTimer));
+    $('mapOverlayClose').onclick = () => this.toggleMapOverlay(false);
+    $('mapOverlay').onclick = (e) => {
+      if (e.target.id === 'mapOverlay') this.toggleMapOverlay(false);
     };
     $('bGoPf').onclick = () => h.goPlatform();
     $('bCall').onclick = () => h.callTrain();
@@ -110,12 +154,27 @@ export class UI {
   }
 
   // ---------------------------------------------------------------------------------------------- messages / prompts
+  /** messages queue (up to 3 deep) instead of overwriting one another when several land at once */
   showMsg(text, ms = 2600) {
+    if (this.msgBusy) {
+      if (this.msgQueue.length < 3) this.msgQueue.push({ text, ms });
+      return;
+    }
+    this._displayMsg(text, ms);
+  }
+
+  _displayMsg(text, ms) {
     const el = $('msg');
+    this.msgBusy = true;
     el.textContent = text;
     el.classList.add('show');
     clearTimeout(this.msgTimer);
-    this.msgTimer = setTimeout(() => el.classList.remove('show'), ms);
+    this.msgTimer = setTimeout(() => {
+      el.classList.remove('show');
+      this.msgBusy = false;
+      const next = this.msgQueue.shift();
+      if (next) setTimeout(() => this._displayMsg(next.text, next.ms), 250);
+    }, ms);
   }
 
   /** text: prompt line (null hides everything); showText false on touch devices where only the round button is shown */
@@ -159,12 +218,15 @@ export class UI {
       $('navText').textContent = txt;
       this.lastNav = txt;
     }
-    const a = this.t(info.auto ? 'nav_manual' : 'nav_auto');
-    if ($('navAuto').textContent !== a) $('navAuto').textContent = a;
+    if (this.lastNavAuto !== info.auto) {
+      this.lastNavAuto = info.auto;
+      $('navAuto').innerHTML = `${info.auto ? ICONS.hand : ICONS.footprints}<span>${esc(this.t(info.auto ? 'nav_manual' : 'nav_auto'))}</span>`;
+    }
   }
 
   setTimeIcon(name) {
-    $('bTime').textContent = { day: '☀️', dusk: '🌇', night: '🌙' }[name] || '🌇';
+    $('bTime').innerHTML = timeIcon(name);
+    document.body.dataset.tod = name; // lets the HUD colors shift a little for dusk/night
   }
 
   setTrain(info, riding) {
@@ -252,16 +314,27 @@ export class UI {
     this.mapBase = cv;
   }
 
+  toggleMapOverlay(open) {
+    this.mapOverlayOpen = open;
+    $('mapOverlay').classList.toggle('hidden', !open);
+  }
+
+  /** draws the normal minimap, plus the enlarged overlay copy (same drawing, scaled up) while it's open */
   drawMinimap(player, yaw, train, route) {
+    this._drawMapOnto($('map'), player, yaw, train, route);
+    if (this.mapOverlayOpen) this._drawMapOnto($('mapBig'), player, yaw, train, route);
+  }
+
+  _drawMapOnto(cv, player, yaw, train, route) {
     if (!this.mapBase) return;
-    const cv = $('map');
     const ctx = cv.getContext('2d');
     const g = this.ground;
     const R = 62; // cells shown around the player (radius)
     const cx = (player.x - g.x0) / g.step;
     const cy = g.ny - 1 - (-player.z - g.y0) / g.step;
     ctx.save();
-    ctx.clearRect(0, 0, cv.width, cv.height);
+    ctx.scale(cv.width / 176, cv.height / 176); // draws the same 176x176 layout, scaled to the canvas' actual backing size
+    ctx.clearRect(0, 0, 176, 176);
     ctx.beginPath();
     ctx.arc(88, 88, 86, 0, Math.PI * 2);
     ctx.clip();
@@ -352,7 +425,7 @@ export class UI {
     let body = '';
     if (kind === 'help') body = `<h2>${t('help')}</h2><div class="keys">${this.helpHTML()}</div><p class="credit">${t('credit')}</p>`;
     else if (kind === 'spots') {
-      body = `<h2>${t('spots')}</h2><div class="spots">${this.meta.poi.map((p, i) => `<div class="spotrow"><button data-spot="${i}">${esc(this.s.lang === 'en' ? p.en : p.name)}</button><button data-guide="${i}" title="${esc(t('guide_btn'))}" aria-label="${esc(t('guide_btn'))}: ${esc(this.s.lang === 'en' ? p.en : p.name)}">🧭</button></div>`).join('')}</div>
+      body = `<h2>${t('spots')}</h2><div class="spots">${this.meta.poi.map((p, i) => `<div class="spotrow"><button data-spot="${i}">${esc(this.s.lang === 'en' ? p.en : p.name)}</button><button data-guide="${i}" title="${esc(t('guide_btn'))}" aria-label="${esc(t('guide_btn'))}: ${esc(this.s.lang === 'en' ? p.en : p.name)}">${ICONS.compass}</button></div>`).join('')}</div>
         <div class="row"><button id="mShare">${t('share')}</button></div>`;
     } else if (kind === 'settings') {
       const sel = (id, opts, val) => `<select id="${id}">${opts.map(([v, l]) => `<option value="${v}"${v === val ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
@@ -362,6 +435,7 @@ export class UI {
         <label>${t('volume')} <input id="sVol" type="range" min="0" max="1" step="0.05" value="${this.s.volume}"></label>
         <label><input id="sMute" type="checkbox" ${this.s.muted ? 'checked' : ''}> ${t('mute')}</label>
         <label>${t('viewMode')} ${sel('sView', [['drag', t('vm_drag')], ['right', t('vm_right')], ['lock', t('vm_lock')]], this.s.viewMode)}</label>
+        ${this.touch ? `<label>${t('handed')} ${sel('sHanded', [['right', t('handed_right')], ['left', t('handed_left')]], this.s.handed)}</label>` : ''}
         <label>${t('sens')} <input id="sSens" type="range" min="0.4" max="2.2" step="0.1" value="${this.s.sens}"></label>
         <label><input id="sInv" type="checkbox" ${this.s.invertY ? 'checked' : ''}> ${t('invertY')}</label>
         <label><input id="sAuto" type="checkbox" ${this.s.autoCam ? 'checked' : ''}> ${t('autoCam')}</label>
@@ -394,6 +468,10 @@ export class UI {
     on('sVol', 'input', (e) => this._set('volume', +e.target.value));
     on('sMute', 'change', (e) => this._set('muted', e.target.checked));
     on('sView', 'change', (e) => this._set('viewMode', e.target.value));
+    on('sHanded', 'change', (e) => {
+      this._set('handed', e.target.value);
+      document.body.dataset.handed = e.target.value;
+    });
     on('sSens', 'input', (e) => this._set('sens', +e.target.value));
     on('sInv', 'change', (e) => this._set('invertY', e.target.checked));
     on('sAuto', 'change', (e) => this._set('autoCam', e.target.checked));

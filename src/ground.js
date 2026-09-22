@@ -73,13 +73,17 @@ export class Ground {
     }
   }
 
-  /** true when the straight segment crosses a building footprint (used to keep the camera outside walls) */
+  /** true when the straight segment crosses a building footprint or a fence / pole / railing (used to keep the camera outside walls) */
   segmentBlocked(x0, z0, x1, z1) {
     const n = Math.max(2, Math.ceil(Math.hypot(x1 - x0, z1 - z0) / 0.6));
     for (let i = 1; i <= n; i++) {
       const t = i / n;
-      const h = this.height(x0 + (x1 - x0) * t, z0 + (z1 - z0) * t);
-      if (h !== h && this.index(x0 + (x1 - x0) * t, z0 + (z1 - z0) * t) >= 0) return t;
+      const x = x0 + (x1 - x0) * t;
+      const z = z0 + (z1 - z0) * t;
+      const k = this.index(x, z);
+      if (k < 0) continue;
+      const h = this.height(x, z);
+      if (h !== h || this.solid[k] === 1) return t;
     }
     return 0;
   }

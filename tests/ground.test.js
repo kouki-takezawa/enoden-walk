@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { Ground, SEA_BLOCK } from '../src/ground.js';
 
 // 10 x 8 grid, 1 m cells, x0 = -5, y0 = -4 (Blender coords; three.js z = -y)
-const grid = { x0: -5, y0: -4, step: 1, nx: 10, ny: 8 };
+const grid = { x0: -5, y0: -4, step: 1, nx: 10, ny: 9 };
 function make(fill = (i, j) => 1 + 0.1 * i) {
   const h = new Float32Array(grid.nx * grid.ny);
   const s = new Uint8Array(grid.nx * grid.ny).fill(1);

@@ -22,6 +22,7 @@ export const DEFAULTS = {
   autoTime: false, // day -> dusk -> night cycle
   rain: false,
   reduceMotion: typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches,
+  handed: 'right', // right | left — which side the touch move-stick sits on
 };
 
 export function loadSettings() {
@@ -42,11 +43,13 @@ export function saveSettings(s) {
   }
 }
 
-/** auto preset: touch devices / weak CPUs start on low, everything else on medium (the frame-time governor adapts the resolution) */
+/** auto preset: touch devices / weak CPUs / slow or data-saver connections start on low, everything else on medium (the frame-time governor adapts the resolution) */
 export function autoPreset() {
   const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
   const cores = navigator.hardwareConcurrency || 4;
-  if (coarse || cores <= 4) return 'low';
+  const conn = navigator.connection;
+  const slowNet = conn && (conn.saveData || /^(slow-2g|2g|3g)$/.test(conn.effectiveType || ''));
+  if (coarse || cores <= 4 || slowNet) return 'low';
   return cores >= 12 ? 'high' : 'medium';
 }
 
@@ -59,6 +62,7 @@ const STR = {
     assembling: '街を組み立て中…',
     ready: '準備できました',
     failed: '読み込みに失敗しました',
+    retry: 'もう一度試す',
     nowebgl: 'WebGL に対応したブラウザで開いてください',
     where_default: '鎌倉高校前 周辺',
     where_near: '{name} 付近',
@@ -101,7 +105,8 @@ const STR = {
     helpKey: 'このガイド',
     recenterKey: '視点を背後へ',
     gamepad: 'ゲームパッド: 左スティック 移動 / 右スティック 視点 / A ジャンプ / RT 走る / X 全力 / Y 乗る',
-    touchHint: 'スマホ: 左側をスライドで移動、右側をドラッグで視点、2本指で拡大縮小',
+    touchHint: 'スマホ: 左側をスライドで移動（奥まで倒すと走る）、右側をドラッグで視点、2本指で拡大縮小',
+    tutorial_text: 'ここをスライドして歩こう',
     nextTrain: '次の電車',
     east: '藤沢方面',
     west: '鎌倉方面',
@@ -124,6 +129,9 @@ const STR = {
     photoHide: '人物を隠す',
     capture: '撮影して保存',
     saved: '写真を保存しました',
+    install_hint: 'ホーム画面に追加すると、アプリのようにすぐ開けます',
+    install_hint_ios: '共有ボタン →「ホーム画面に追加」で、アプリのようにすぐ開けます',
+    install_btn: '追加',
     exitPhoto: '写真モードを終了',
     quality_now: '画質: {q}',
     credit: '地形・建物: 国土交通省 Project PLATEAU（CC BY 4.0）／ 道路・線路: © OpenStreetMap contributors（ODbL）<br>3Dモデル（風景・電車・人物）は Blender で手続き生成した非公式の創作物です。',
@@ -133,6 +141,9 @@ const STR = {
     announce: '駅のアナウンス（音声）',
     autoTime: '時刻を自動で進める',
     rain: '雨',
+    handed: '利き手（スマホ操作）',
+    handed_right: '右手でボタン',
+    handed_left: '左手でボタン',
     platform_hint: 'ホームへは西端のスロープから上がれます',
     st_koshigoe: '腰越',
     st_shichiri: '七里ヶ浜',
@@ -143,12 +154,12 @@ const STR = {
     say_arriving_west: 'まもなく、鎌倉方面行きの電車が到着します。危ないですから、黄色い線の内側でお待ちください',
     say_depart: '発車します。次は、{st}です',
     say_soon: 'まもなく、{st}に到着します',
-    go_platform: '🚉 ホームへ',
-    call_train: '⏩ 電車を呼ぶ',
+    go_platform: 'ホームへ',
+    call_train: '電車を呼ぶ',
     train_called: '電車がやって来ます',
     nav_to: '{name} まで {m} m',
-    nav_auto: '🚶 自動で歩く',
-    nav_manual: '✋ 手動',
+    nav_auto: '自動で歩く',
+    nav_manual: '手動',
     nav_stop: '案内をやめる',
     nav_arrived: '到着しました',
     nav_none: '道が見つかりませんでした',
@@ -158,7 +169,7 @@ const STR = {
     nav_manual_now: '自分で歩くので、案内だけ続けます',
     nav_target: '指定した場所',
     guide_btn: '案内',
-    map_hint: 'クリック / タップで、そこまで歩きます',
+    map_hint: 'クリック / タップで、そこまで歩きます（長押しで拡大表示）',
     autowalk_on: 'オートウォーク: オン（F か移動キーで解除）',
     autowalk_off: 'オートウォーク: オフ',
     autowalkKey: 'オートウォーク',
@@ -173,6 +184,7 @@ const STR = {
     assembling: 'Building the town…',
     ready: 'Ready',
     failed: 'Failed to load',
+    retry: 'Try again',
     nowebgl: 'Please open this page in a WebGL capable browser',
     where_default: 'Kamakura-Koko-Mae area',
     where_near: 'Near {name}',
@@ -215,7 +227,8 @@ const STR = {
     helpKey: 'This guide',
     recenterKey: 'Camera behind me',
     gamepad: 'Gamepad: left stick move / right stick look / A jump / RT run / X sprint / Y board',
-    touchHint: 'Touch: slide on the left to move, drag on the right to look, pinch to zoom',
+    touchHint: 'Touch: slide on the left to move (push it all the way for a run), drag on the right to look, pinch to zoom',
+    tutorial_text: 'Slide here to walk',
     nextTrain: 'Next train',
     east: 'for Fujisawa',
     west: 'for Kamakura',
@@ -238,6 +251,9 @@ const STR = {
     photoHide: 'Hide the character',
     capture: 'Capture & save',
     saved: 'Photo saved',
+    install_hint: 'Add this to your home screen to open it like an app',
+    install_hint_ios: 'Tap Share → "Add to Home Screen" to open it like an app',
+    install_btn: 'Add',
     exitPhoto: 'Exit photo mode',
     quality_now: 'Quality: {q}',
     credit: 'Terrain & buildings: MLIT Project PLATEAU (CC BY 4.0) / roads & rails: © OpenStreetMap contributors (ODbL)<br>All 3D models (scenery, train, character) are unofficial procedurally generated creations made with Blender.',
@@ -247,6 +263,9 @@ const STR = {
     announce: 'Station announcements (voice)',
     autoTime: 'Advance the time of day automatically',
     rain: 'Rain',
+    handed: 'Handedness (touch controls)',
+    handed_right: 'Buttons on the right',
+    handed_left: 'Buttons on the left',
     platform_hint: 'The platform is reached by the ramp at its west end',
     st_koshigoe: 'Koshigoe',
     st_shichiri: 'Shichirigahama',
@@ -257,12 +276,12 @@ const STR = {
     say_arriving_west: 'A train for Kamakura is now arriving. Please stand behind the yellow line.',
     say_depart: 'This train is departing. The next stop is {st}.',
     say_soon: 'We will soon arrive at {st}.',
-    go_platform: '🚉 To the platform',
-    call_train: '⏩ Call a train',
+    go_platform: 'To the platform',
+    call_train: 'Call a train',
     train_called: 'A train is on its way',
     nav_to: '{name}: {m} m',
-    nav_auto: '🚶 Walk for me',
-    nav_manual: '✋ Manual',
+    nav_auto: 'Walk for me',
+    nav_manual: 'Manual',
     nav_stop: 'Stop guiding',
     nav_arrived: 'You have arrived',
     nav_none: 'No route found',
@@ -272,7 +291,7 @@ const STR = {
     nav_manual_now: 'You are walking yourself; guidance continues',
     nav_target: 'Selected spot',
     guide_btn: 'Guide',
-    map_hint: 'Click / tap to walk there',
+    map_hint: 'Click / tap to walk there (long-press to enlarge)',
     autowalk_on: 'Auto-walk: on (F or a move key stops it)',
     autowalk_off: 'Auto-walk: off',
     autowalkKey: 'Auto-walk',

@@ -128,7 +128,8 @@ export class Player {
       }
     }
     const gh = this.ground.height(this.pos.x, this.pos.z);
-    if (gh === gh) this.groundY += (gh - this.groundY) * Math.min(1, dt * 18);
+    // snap up instantly (a lagged rise would sink the feet into a curb / step riser); ease down for soft footing
+    if (gh === gh) this.groundY = gh > this.groundY ? gh : this.groundY + (gh - this.groundY) * Math.min(1, dt * 18);
 
     // ---- jump: crouch (0.43 s), flight (0.57 s) matches the baked clip
     let jumpLift = 0;
