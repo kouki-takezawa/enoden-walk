@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { makeAlarmGlow, makeBeam, makeSparks } from './lights.js';
-import { patchTrainLivery, patchGeneric } from './fx.js';
+import { patchTrainLivery } from './fx.js';
 import { makeTorsoGeometry } from './people.js';
 
 const LEN = 26.3; // two-car set, cab end at +x of the model (x = 0.6 at the origin)
@@ -11,6 +11,7 @@ const DECEL = 1.1;
 const START = 160;
 const END = 205; // riders turn around here
 const DWELL = 20; // long enough to walk up the platform and board
+const WHEEL_R = 0.43; // RESEARCH["train_1000"].wheel_dia / 2 (enoden_kamakurakokomae.py) — for speed-matched wheel spin
 
 /** Runs the Enoden set along the track with a stop at the platform, drives the level crossing (alarm lamps + barrier arms) and can carry the player. */
 export class Train {
@@ -36,6 +37,7 @@ export class Train {
         }
       }
     });
+    this.wheels = trainGltf.scene.getObjectByName('Enoden_1000_Wheels'); // separate node (enoden_kamakurakokomae.py: car_mb) spun in update()
     this.dir = -1; // the first run is eastbound (dir flips before each run)
     this.front = -START;
     this.state = 'wait';
@@ -72,7 +74,6 @@ export class Train {
     this.inner.add(this.head, this.head.target);
     this.passengers = this._passengers();
     this.inner.add(this.passengers);
-    this.inner.add(this._interior());
     this.beam = makeBeam();
     this.beam.position.set(CAB_X + 0.3, 1.5, 0);
     this.inner.add(this.beam);
@@ -111,61 +112,14 @@ export class Train {
     return im;
   }
 
-  /** liveried-paint weathering (see fx.js patchTrainLivery) + the interior materials' texture noise; call again on
-   *  a quality-preset switch. */
+  /** liveried-paint weathering (see fx.js patchTrainLivery); call again on a quality-preset switch. The interior
+   *  seats/floor (car_mb() in enoden_kamakurakokomae.py) reuse the body's own green/dark materials, so they're
+   *  already covered by the branches below. */
   style(preset) {
     for (const m of this.mats) {
       if (m.name === 'W_MAT_Enoden_Green') patchTrainLivery(m, preset.detail, true);
       else if (m.name === 'W_MAT_Enoden_Cream' || m.name === 'W_MAT_Train_Roof' || m.name === 'W_MAT_Train_Dark') patchTrainLivery(m, preset.detail, false);
-      else if (m.name === 'Interior_Seat') patchGeneric(m, preset.detail, preset.bump, { freq: 3.5, amp: 0.14, bumpFreq: 14.0, bumpAmp: 0.10 });
-      else if (m.name === 'Interior_Floor') patchGeneric(m, preset.detail, preset.bump, { freq: 4.0, amp: 0.20, bumpFreq: 10.0, bumpAmp: 0.12 });
     }
-  }
-
-  /** Phase N1: the car had no interior at all (a bare window pane with nothing behind it) — a few long bench
-   *  seats, floor, grab poles and a ceiling light strip, built once (not instanced: there is only ever one train). */
-  _interior() {
-    const g = new THREE.Group();
-    const seatMat = new THREE.MeshStandardMaterial({ color: 0x3a5f47, roughness: 0.85 }); // green moquette, typical of Japanese commuter trains
-    const floorMat = new THREE.MeshStandardMaterial({ color: 0x6b6a62, roughness: 0.88 });
-    const poleMat = new THREE.MeshStandardMaterial({ color: 0xcfd3d6, roughness: 0.3, metalness: 0.7 });
-    const lampMat = new THREE.MeshStandardMaterial({ color: 0xfff3d6, roughness: 0.6, emissive: 0xfff3d6, emissiveIntensity: 0.35 });
-    seatMat.name = 'Interior_Seat';
-    floorMat.name = 'Interior_Floor';
-    this.mats.add(seatMat).add(floorMat);
-
-    const seatGeo = new THREE.BoxGeometry(4.6, 0.42, 0.46);
-    const backGeo = new THREE.BoxGeometry(4.6, 0.5, 0.08);
-    const poleGeo = new THREE.CylinderGeometry(0.022, 0.022, 1.55, 8);
-    const lampGeo = new THREE.BoxGeometry(4.2, 0.05, 0.16);
-    for (const cx of [CAB_X - 6.55, CAB_X - 20.55]) {
-      for (const sy of [-1, 1]) {
-        const seat = new THREE.Mesh(seatGeo, seatMat);
-        seat.position.set(cx, 1.07 + 0.22, sy * 1.00);
-        seat.castShadow = seat.receiveShadow = true;
-        g.add(seat);
-        const back = new THREE.Mesh(backGeo, seatMat);
-        back.position.set(cx, 1.07 + 0.58, sy * 1.17);
-        back.receiveShadow = true;
-        g.add(back);
-      }
-      for (const dx of [-4.6, 0, 4.6]) {
-        for (const sy of [-1, 1]) {
-          const pole = new THREE.Mesh(poleGeo, poleMat);
-          pole.position.set(cx + dx, 1.07 + 0.78, sy * 1.10);
-          pole.castShadow = true;
-          g.add(pole);
-        }
-      }
-      const lamp = new THREE.Mesh(lampGeo, lampMat);
-      lamp.position.set(cx, 3.30, 0);
-      g.add(lamp);
-    }
-    const floor = new THREE.Mesh(new THREE.BoxGeometry(LEN - 1.2, 0.06, 2.18), floorMat);
-    floor.position.set(CAB_X - LEN / 2 + 0.6, 1.04, 0);
-    floor.receiveShadow = true;
-    g.add(floor);
-    return g;
   }
 
   place() {
@@ -330,6 +284,10 @@ export class Train {
       this.glass.emissive.setRGB(1.0, 0.82, 0.55);
       this.glass.emissiveIntensity = night * 0.55;
     }
+    // wheel discs are a separate exported node (car_mb() in enoden_kamakurakokomae.py) spun about their own local
+    // Z (the axle direction after Blender's Y-up glTF export) — see blender/cars.py's module docstring for the
+    // same convention on the road-traffic wheels.
+    if (this.wheels) this.wheels.rotation.z += (this.dir * this.speed * dt) / WHEEL_R;
     this.place();
   }
 }

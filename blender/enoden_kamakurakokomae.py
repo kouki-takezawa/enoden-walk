@@ -3704,12 +3704,16 @@ M_GREEN, M_CREAM, M_DARK, M_GLASS, M_METAL, M_ROOF, M_BELLOWS, M_HEAD, M_TAIL, M
 
 def car_mb(pan_raised):
     """One car in local coordinates: centre at x=0, cab end at +x, floor 1.07 m above the rail head.
-    Livery from the reference photos: dark-green roof and upper rail, cream window band, dark-green skirt with a thin cream line."""
+    Livery from the reference photos: dark-green roof and upper rail, cream window band, dark-green skirt with a thin cream line.
+    Returns (mb, wheels_mb): the wheel *discs* are built into a separate MB (own object once exported) so
+    src/train.js can spin them independently of the body — the bogie frame/axles stay in `mb` since a thin rod or
+    a plain box is rotationally symmetric at this scale anyway, not worth the extra object for zero visible change."""
     T = RESEARCH["train_1000"]
     Lc, W = T["car_length"], T["body_width"]
     hl = Lc / 2.0
     NOSE = 0.45                                                                     # cab nose: plan-view taper + raked windshield
     mb = MB()
+    wh = MB()
     prof_ = [(-1.20, 0.95), (1.20, 0.95), (1.20, 1.85), (1.182, 2.95), (1.17, 3.02), (0.98, 3.26), (0.55, 3.37), (0.0, T["roof_height"]),
              (-0.55, 3.37), (-0.98, 3.26), (-1.17, 3.02), (-1.182, 2.95), (-1.20, 1.85)]
     seg = [M_DARK, M_GREEN, M_CREAM] + [M_GREEN] * 8 + [M_CREAM, M_GREEN]              # 13 edges
@@ -3829,14 +3833,35 @@ def car_mb(pan_raised):
             mb.cyl((xb + dx, -0.78, 0.43), (xb + dx, 0.78, 0.43), 0.065, 0.065, 10, M_METAL)
             for sy in (-1, 1):
                 yc = sy * 0.55
-                mb.cyl((xb + dx, yc - 0.065, 0.43), (xb + dx, yc + 0.065, 0.43), T["wheel_dia"] / 2.0, T["wheel_dia"] / 2.0, 28, M_METAL)
-                mb.cyl((xb + dx, yc - sy * 0.085, 0.43), (xb + dx, yc - sy * 0.055, 0.43), 0.458, 0.458, 28, M_METAL)
+                wr = T["wheel_dia"] / 2.0
+                wh.cyl((xb + dx, yc - 0.065, 0.43), (xb + dx, yc + 0.065, 0.43), wr, wr, 28, 0)
+                wh.cyl((xb + dx, yc - sy * 0.085, 0.43), (xb + dx, yc - sy * 0.055, 0.43), 0.458, 0.458, 28, 0)
+                for k in range(5):                                                        # small lug bolts: the disc is otherwise
+                    ang = 2 * math.pi * k / 5                                             # perfectly round, so spinning it would be invisible
+                    bx, bz = 0.62 * wr * math.cos(ang), 0.43 + 0.62 * wr * math.sin(ang)
+                    wh.cyl((xb + dx + bx, yc + sy * 0.066, bz), (xb + dx + bx, yc + sy * 0.078, bz), 0.018, 0.018, 6, 0)
         for sy in (-1, 1):                                                                 # yellow-black safety guards around the bogie
             mb.box((xb, sy * 0.95, 0.62), (2.30, 0.022, 0.30), M_SAFETY)
             mb.box((xb - 1.16, sy * 0.60, 0.62), (0.022, 0.70, 0.30), M_SAFETY)
             mb.box((xb + 1.16, sy * 0.60, 0.62), (0.022, 0.70, 0.30), M_SAFETY)
         mb.box((xb - ab, 0, 0.48), (0.52, 0.46, 0.40), M_BLACK)
-    return mb
+
+    # ---- interior: longitudinal bench seats under each window bay (real Enoden 1000 seating), floor, standing
+    # poles + grab bars at each door, ceiling light strips. Previously a handful of JS box primitives in
+    # train.js's _interior() — modelled here instead so it travels through the same glTF export as the rest of
+    # the car and needs no separate runtime geometry.
+    floor_z = 1.07
+    mb.box((0, 0, floor_z - 0.02), (Lc - 0.3, 2.10, 0.04), M_DARK)
+    seat_h = 0.43
+    for sy in (-1, 1):
+        for a, b in wins:
+            mb.box(((a + b) / 2, sy * 0.95, floor_z + seat_h / 2), (b - a - 0.06, 0.42, seat_h), M_GREEN)  # moquette, same livery green as the body
+    for xd in (-4.2, 0.0, 4.2):
+        mb.cyl((xd, 0, floor_z), (xd, 0, T["roof_height"] - 0.05), 0.025, 0.025, 8, M_METAL)
+        mb.box((xd, 0, T["roof_height"] - 0.25), (0.03, 0.9, 0.03), M_METAL)
+    for x in (-4.5, -1.5, 1.5, 4.5):
+        mb.box((x, 0, T["roof_height"] - 0.08), (1.6, 0.5, 0.04), M_CREAM)
+    return mb, wh
 
 
 def build_train():
@@ -3847,8 +3872,13 @@ def build_train():
     xb = xa - (T["car_length"] + gap)                                   # centre of the trailing car
     xc = (xa + xb) / 2.0
     tr = MB()
-    tr.append(car_mb(True), Matrix.Translation((xa, 0, 0)))
-    tr.append(car_mb(False), Matrix.Translation((xb, 0, 0)) @ Matrix.Rotation(math.pi, 4, "Z"))
+    wheels = MB()
+    car_a, wheels_a = car_mb(True)
+    car_b, wheels_b = car_mb(False)
+    tr.append(car_a, Matrix.Translation((xa, 0, 0)))
+    tr.append(car_b, Matrix.Translation((xb, 0, 0)) @ Matrix.Rotation(math.pi, 4, "Z"))
+    wheels.append(wheels_a, Matrix.Translation((xa, 0, 0)))
+    wheels.append(wheels_b, Matrix.Translation((xb, 0, 0)) @ Matrix.Rotation(math.pi, 4, "Z"))
     # gangway bellows (ジャバラ) between the cars + coupler bar
     for i in range(7):
         s = 2.20 if i % 2 == 0 else 2.12
@@ -3858,6 +3888,9 @@ def build_train():
     mats = [MAT["MAT_Enoden_Green"], MAT["MAT_Enoden_Cream"], MAT["MAT_Train_Dark"], MAT["MAT_Glass_Train"], MAT["MAT_Train_Metal"],
             MAT["MAT_Train_Roof"], MAT["MAT_Bellows"], MAT["MAT_Lamp_Head"], MAT["MAT_Lamp_Tail"], MAT["MAT_Black"], MAT["MAT_Insulator"], MAT["MAT_Safety_Stripe"]]
     ob = tr.build("Enoden_1000_TwoCar", coll("P3_Train"), mats, smooth_angle=math.radians(38), bevel=0.006)
+    wheels_ob = wheels.build("Enoden_1000_Wheels", coll("P3_Train"), [MAT["MAT_Train_Metal"]], smooth_angle=math.radians(38))
+    wheels_ob.parent = ob  # so place_train()'s single ob.location.x move carries the wheels along; train.js spins this node about its own local Y (axle) per speed
+    TRAIN["wheels"] = wheels_ob
 
     # 45 deg warm-white spot (head lamp) on the leading car
     sp = bpy.data.lights.new("Headlight_Spot", "SPOT")

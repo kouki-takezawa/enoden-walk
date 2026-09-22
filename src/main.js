@@ -31,7 +31,7 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const ZERO = { x: 0, y: 0, run: false, sprint: false };
 const UP = new THREE.Vector3(0, 1, 0);
 const TIMES = ['day', 'dusk', 'night'];
-const PEOPLE_COUNT = [0, 6, 8]; // by preset.detail (low/medium/high+ultra): background NPCs are cheap, but low stays empty-scene-minimal
+const PEOPLE_COUNT = [0, 4, 6]; // by preset.detail (low/medium/high+ultra): now real rigged SkinnedMesh extras (B3), so kept fewer than the old box-primitive crowd
 const CAR_COUNT = [0, 4, 6];
 const isTouch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
 /** short taptic buzz for jump / alarm / train hit; a no-op where Vibration API isn't available (iOS Safari) */
@@ -130,6 +130,8 @@ let sea;
 let glow;
 let pedestrians;
 let traffic;
+let carsG;
+let pedestrianTemplates;
 let ui;
 let input;
 let ready = false;
@@ -155,7 +157,11 @@ const trainLookPos = new THREE.Vector3();
 
 // ---------------------------------------------------------------------------------------------------- loading
 // decoded sizes in bytes: progress is measured against them because the server compresses (content-length is the encoded size)
-const SIZES = { meta: 2400, ground: 492984, surface: 123246, solid: 123246, trees: 103893, world: 4097256, train: 271868, character: 852648 };
+const SIZES = {
+  meta: 2393, ground: 492984, surface: 123246, solid: 123246, trees: 103893, world: 4100056, train: 303360,
+  character: 852648, cars: 201536, ped0: 4961024, ped1: 4926104,
+};
+const PED_FILES = ['ped0', 'ped1'];
 const TOTAL = Object.values(SIZES).reduce((a, b) => a + b, 0);
 const done = {};
 function progress(name, frac) {
@@ -197,7 +203,7 @@ async function load() {
   const M = (f) => `${BASE}models/${f}?v=${__BUILD__}`;
   meta = await (await fetch(M('meta.json'))).json();
   progress('meta', 1);
-  const [gbuf, sbuf, obuf, trees, wbuf, tbuf, cbuf] = await Promise.all([
+  const [gbuf, sbuf, obuf, trees, wbuf, tbuf, cbuf, carbuf, ...pedbufs] = await Promise.all([
     fetchBuf('ground', M('ground.bin')),
     fetchBuf('surface', M('surface.bin')),
     fetchBuf('solid', M('solid.bin')),
@@ -205,6 +211,8 @@ async function load() {
     fetchBuf('world', M('world.glb')),
     fetchBuf('train', M('train.glb')),
     fetchBuf('character', M('character.glb')),
+    fetchBuf('cars', M('cars.glb')),
+    ...PED_FILES.map((name) => fetchBuf(name, M(`${name}.glb`))),
   ]);
   $('loadtext').textContent = t('assembling');
   await new Promise((r) => setTimeout(r, 30));
@@ -214,7 +222,9 @@ async function load() {
   // the only way onto the platform is the ramp at its west end: make it a teleport spot too
   meta.poi.push({ name: 'ホーム入口（西のスロープ）', en: 'Platform entrance (west ramp)', x: meta.platform.x0 - 2.5, y: (meta.platform.y0 + meta.platform.y1) / 2 });
   ground.addTrees(trees.trees);
-  const [worldG, trainG, charG] = await Promise.all([parse(wbuf), parse(tbuf), parse(cbuf)]);
+  const [worldG, trainG, charG, carsGltf, ...pedG] = await Promise.all([parse(wbuf), parse(tbuf), parse(cbuf), parse(carbuf), ...pedbufs.map(parse)]);
+  carsG = carsGltf;
+  pedestrianTemplates = pedG;
 
   worldRoot = worldG.scene;
   tunePBR(worldRoot);
@@ -248,9 +258,9 @@ async function load() {
   train = new Train(trainG, worldRoot, meta);
   train.style(preset);
   scene.add(train.group);
-  pedestrians = new Pedestrians(ground, meta, PEOPLE_COUNT[preset.detail] ?? 0);
+  pedestrians = new Pedestrians(pedestrianTemplates, ground, meta, PEOPLE_COUNT[preset.detail] ?? 0);
   scene.add(pedestrians.group);
-  traffic = new Traffic(ground, meta, CAR_COUNT[preset.detail] ?? 0);
+  traffic = new Traffic(carsG, ground, meta, CAR_COUNT[preset.detail] ?? 0);
   scene.add(traffic.group);
   const sp = meta.spawn;
   player = new Player(charG, ground, { x: sp.x, z: -sp.y, yaw: Math.atan2(-sp.x, sp.y) });
@@ -321,10 +331,10 @@ function applyQuality(name) {
   sea = makeSea(ground, meta.sea_level, preset.seaDepth, preset.waves);
   scene.add(sea);
   disposeGroup(pedestrians.group);
-  pedestrians = new Pedestrians(ground, meta, PEOPLE_COUNT[preset.detail] ?? 0);
+  pedestrians = new Pedestrians(pedestrianTemplates, ground, meta, PEOPLE_COUNT[preset.detail] ?? 0);
   scene.add(pedestrians.group);
   disposeGroup(traffic.group);
-  traffic = new Traffic(ground, meta, CAR_COUNT[preset.detail] ?? 0);
+  traffic = new Traffic(carsG, ground, meta, CAR_COUNT[preset.detail] ?? 0);
   scene.add(traffic.group);
   buildPointLights();
 }
@@ -787,8 +797,8 @@ function updateVisuals(dt) {
   petals.userData.set(!settings.reduceMotion, camera, pxScale, cur.night);
   gulls.userData.update(dt, cur.night, cur.lightColor);
   stepFx.update(dt, player, player.root.visible && !player.riding, cur.night, pxScale);
-  pedestrians.update(dt);
-  traffic.update(dt, cur.night);
+  pedestrians.update(dt, player.pos);
+  traffic.update(dt, cur.night, train.alarm);
 }
 
 // ---------------------------------------------------------------------------------------------------- camera

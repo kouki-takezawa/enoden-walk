@@ -48,6 +48,8 @@ def parse():
     ap.add_argument("--sheet-only", default="", dest="sheet_only")
     ap.add_argument("--sheet-w", type=int, default=0, dest="sheet_w")
     ap.add_argument("--no-verify", action="store_true")
+    ap.add_argument("--seed", type=int, default=20, help="hair/brow placement jitter seed (face/body shape itself is deterministic)")
+    ap.add_argument("--outfit", type=int, default=0, help="index into OUTFITS (make_materials) for tee/chino colour — pedestrian variety")
     ap.add_argument("--fast", action="store_true", help="lower head resolution for quick tests")
     return ap.parse_args(argv)
 
@@ -89,7 +91,7 @@ def finalize(ob, levels=0, render_levels=None):
 
 
 def build_all(coll):
-    rng = random.Random(20)
+    rng = random.Random(ARGS.seed)
     parts = {}
     # ------------------------------------------------------------------ body skin
     body = MB()
@@ -144,6 +146,17 @@ def build_all(coll):
                 watch=watch, fingers=fingers, parts=parts)
 
 
+# tee / tee-rib / chino / chino-shade, indexed by --outfit for pedestrian variety (the player keeps outfit 0 — its
+# established look, verified in earlier renders/screenshots — pedestrians pick from the rest so a wandering crowd
+# doesn't all wear identical clothes).
+OUTFITS = [
+    ("#E4E2DA", "#D6D4CC", "#27303F", "#2E384A"),   # off-white tee, navy chino (original)
+    ("#8A9A8C", "#7C8B7E", "#3A3230", "#443A37"),   # sage tee, brown chino
+    ("#B0505A", "#A0454E", "#282828", "#303030"),   # brick-red tee, charcoal chino
+    ("#4A6A8A", "#40607E", "#C9C2B2", "#D4CDBD"),   # slate-blue tee, khaki chino
+]
+
+
 def make_materials():
     M = {}
     M["skin_body"] = CM.skin("MAT_Skin_Body", head=False)
@@ -153,9 +166,10 @@ def make_materials():
     M["hair"] = CM.hair()
     M["roots"] = CM.hair_roots()
     M["brow"] = CM.brow()
-    M["tee"] = CM.fabric("MAT_Tee", "#E4E2DA", 0.88, 1500.0, 0.55)
-    M["rib"] = CM.fabric("MAT_TeeRib", "#D6D4CC", 0.9, 2200.0, 0.55)
-    M["chino"] = CM.fabric("MAT_Chino", "#27303F", 0.82, 1300.0, 0.35, twill=True, color2="#2E384A")
+    tee_c, rib_c, chino_c, chino_c2 = OUTFITS[ARGS.outfit % len(OUTFITS)]
+    M["tee"] = CM.fabric("MAT_Tee", tee_c, 0.88, 1500.0, 0.55)
+    M["rib"] = CM.fabric("MAT_TeeRib", rib_c, 0.9, 2200.0, 0.55)
+    M["chino"] = CM.fabric("MAT_Chino", chino_c, 0.82, 1300.0, 0.35, twill=True, color2=chino_c2)
     M["belt"] = CM.leather("MAT_Belt", "#2A1B13", 0.42)
     M["leather"] = CM.leather("MAT_ShoeUpper", "#E9E7E1", 0.42)
     M["sole"] = CM.rubber("MAT_ShoeSole")
@@ -219,7 +233,15 @@ def studio(coll, res):
     w = bpy.data.worlds.new("StudioWorld")
     sc.world = w
     w.use_nodes = True
-    bg = w.node_tree.nodes["Background"]
+    wnt = w.node_tree
+    bg = wnt.nodes.get("Background")
+    if bg is None:
+        # a world created via bpy.data.worlds.new() after wm.read_factory_settings(use_empty=True) does not always
+        # auto-populate the default Background/World Output pair the way the regular startup file's world does
+        wnt.nodes.clear()
+        bg = wnt.nodes.new("ShaderNodeBackground")
+        wout = wnt.nodes.new("ShaderNodeOutputWorld")
+        wnt.links.new(bg.outputs["Background"], wout.inputs["Surface"])
     bg.inputs["Color"].default_value = (0.42, 0.44, 0.47, 1.0)
     bg.inputs["Strength"].default_value = 0.9
     # floor
@@ -228,8 +250,15 @@ def studio(coll, res):
     fl.name = "Studio_Floor"
     fm = bpy.data.materials.new("MAT_Floor")
     fm.use_nodes = True
-    fm.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = (0.32, 0.33, 0.35, 1)
-    fm.node_tree.nodes["Principled BSDF"].inputs["Roughness"].default_value = 0.8
+    fnt = fm.node_tree
+    fbsdf = fnt.nodes.get("Principled BSDF")
+    if fbsdf is None:  # see the StudioWorld note above — same missing-default-nodes issue can hit a fresh material
+        fnt.nodes.clear()
+        fbsdf = fnt.nodes.new("ShaderNodeBsdfPrincipled")
+        fout = fnt.nodes.new("ShaderNodeOutputMaterial")
+        fnt.links.new(fbsdf.outputs["BSDF"], fout.inputs["Surface"])
+    fbsdf.inputs["Base Color"].default_value = (0.32, 0.33, 0.35, 1)
+    fbsdf.inputs["Roughness"].default_value = 0.8
     fl.data.materials.append(fm)
     for c in fl.users_collection:
         c.objects.unlink(fl)

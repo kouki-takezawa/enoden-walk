@@ -315,12 +315,18 @@ const LOCAL_POS = ['varying vec3 vLocalPos;', 'vLocalPos = transformed;', 'varyi
  *  light bleeding through thin tissue at grazing/backlit angles — far more cheaply, and suits this scene's frequent
  *  low, warm dusk sun especially well). `bump` (ultra preset only) adds pore-scale normal perturbation. */
 export function patchSkin(mat, detail, bump) {
-  mat.customProgramCacheKey = () => `skin${detail}${bump ? 'b' : ''}`;
+  // Phase B1 (Blender bake) gives Body/Head a real baked diffuse+roughness+normal from the actual procedural skin
+  // material once character.glb has been regenerated — that's strictly better detail than this noise, so skip the
+  // color/bump layers when it's present (checked per-material, so this degrades gracefully to the old full-noise
+  // behaviour against an un-regenerated / pre-B1 character.glb). The fresnel rim light is independent of texture
+  // detail either way, so it always runs.
+  const hasTex = !!mat.map;
+  mat.customProgramCacheKey = () => `skin${detail}${bump ? 'b' : ''}${hasTex ? 't' : ''}`;
   mat.onBeforeCompile = (shader) => {
     inject(shader, ...LOCAL_POS, [
       [
         '#include <color_fragment>',
-        detail > 0
+        detail > 0 && !hasTex
           ? `{
           float blot = fxNoise(vLocalPos.xz * 3.2 + vLocalPos.y * 2.4);
           float fine = fxNoise(vLocalPos.xz * 12.0 + 5.0);
@@ -329,8 +335,8 @@ export function patchSkin(mat, detail, bump) {
         }`
           : '',
       ],
-      ['#include <roughnessmap_fragment>', 'roughnessFactor = clamp(roughnessFactor + (fxRoughNoise(vLocalPos, 22.0) - 0.5) * 0.10, 0.30, 0.85);'],
-      ...(bump ? [['#include <normal_fragment_maps>', 'normal = fxBump(normal, vLocalPos, fxNoise2(vLocalPos.xz * 38.0 + vLocalPos.y * 26.0), 0.05);']] : []),
+      ...(hasTex ? [] : [['#include <roughnessmap_fragment>', 'roughnessFactor = clamp(roughnessFactor + (fxRoughNoise(vLocalPos, 22.0) - 0.5) * 0.10, 0.30, 0.85);']]),
+      ...(bump && !mat.normalMap ? [['#include <normal_fragment_maps>', 'normal = fxBump(normal, vLocalPos, fxNoise2(vLocalPos.xz * 38.0 + vLocalPos.y * 26.0), 0.05);']] : []),
       [
         '#include <emissivemap_fragment>',
         '{ float fres = pow(1.0 - clamp(dot(normalize(normal), normalize(vViewPosition)), 0.0, 1.0), 3.0); totalEmissiveRadiance += vec3(0.55, 0.16, 0.09) * fres * 0.09; }',
@@ -365,12 +371,14 @@ export function patchHair(mat, detail) {
 
 /** clothing (tee / chino): weave-scale normal perturbation (`bump`, ultra only) + subtle dye/wash colour variation. */
 export function patchFabric(mat, detail, bump) {
-  mat.customProgramCacheKey = () => `fabric${detail}${bump ? 'b' : ''}`;
+  // see patchSkin: skip the redundant procedural layers once Phase B1's real bake is present on this material.
+  const hasTex = !!mat.map;
+  mat.customProgramCacheKey = () => `fabric${detail}${bump ? 'b' : ''}${hasTex ? 't' : ''}`;
   mat.onBeforeCompile = (shader) => {
     inject(shader, ...LOCAL_POS, [
-      ['#include <color_fragment>', detail > 0 ? 'diffuseColor.rgb *= 0.92 + 0.14 * fxNoise(vLocalPos.xz * 5.0 + vLocalPos.y * 4.0);' : ''],
-      ['#include <roughnessmap_fragment>', 'roughnessFactor = clamp(roughnessFactor + (fxRoughNoise(vLocalPos, 18.0) - 0.5) * 0.10, 0.55, 0.98);'],
-      ...(bump ? [['#include <normal_fragment_maps>', 'normal = fxBump(normal, vLocalPos, fxNoise2(vLocalPos.xz * 70.0 + vLocalPos.y * 55.0), 0.10);']] : []),
+      ['#include <color_fragment>', detail > 0 && !hasTex ? 'diffuseColor.rgb *= 0.92 + 0.14 * fxNoise(vLocalPos.xz * 5.0 + vLocalPos.y * 4.0);' : ''],
+      ...(hasTex ? [] : [['#include <roughnessmap_fragment>', 'roughnessFactor = clamp(roughnessFactor + (fxRoughNoise(vLocalPos, 18.0) - 0.5) * 0.10, 0.55, 0.98);']]),
+      ...(bump && !mat.normalMap ? [['#include <normal_fragment_maps>', 'normal = fxBump(normal, vLocalPos, fxNoise2(vLocalPos.xz * 70.0 + vLocalPos.y * 55.0), 0.10);']] : []),
     ]);
   };
   mat.needsUpdate = true;
