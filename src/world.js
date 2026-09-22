@@ -2,7 +2,33 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { makeSky } from './sky.js';
-import { patchBuildingWall, patchTerrain, patchAsphalt, patchDeck, patchSkin, patchHair, patchFabric, farLandMaterial } from './fx.js';
+import { patchBuildingWall, patchTerrain, patchAsphalt, patchDeck, patchGeneric, patchSkin, patchHair, patchFabric, farLandMaterial } from './fx.js';
+
+// Phase N0: generic weathering for every other prop/building material that doesn't need bespoke logic (see
+// patchGeneric in fx.js). 'large' = big flat surfaces (roofs, whole walls), 'small' = poles/fences/benches, which
+// need a higher spatial frequency for the noise to actually read as detail at their size.
+const GENERIC_LARGE = { freq: 0.9, amp: 0.20, bumpFreq: 3.5, bumpAmp: 0.22 };
+const GENERIC_SMALL = { freq: 2.6, amp: 0.24, bumpFreq: 9.0, bumpAmp: 0.16 };
+const GENERIC_MATS = {
+  'W_MAT_Building_Roof#w': GENERIC_LARGE,
+  'W_MAT_Balcony#w': GENERIC_LARGE,
+  W_MAT_Wall_Plaster: GENERIC_LARGE,
+  W_MAT_Block_Wall: GENERIC_LARGE,
+  W_MAT_Stone_House: GENERIC_LARGE,
+  W_MAT_Siding_Corr: GENERIC_LARGE,
+  W_MAT_Slate_Roof: GENERIC_LARGE,
+  W_MAT_Platform_Wall: GENERIC_LARGE,
+  W_MAT_Revetment: GENERIC_LARGE,
+  W_MAT_Stone_Light: GENERIC_SMALL,
+  W_MAT_Stone_Black: GENERIC_SMALL,
+  W_MAT_Concrete: GENERIC_SMALL,
+  W_MAT_Concrete_Pole: GENERIC_SMALL,
+  W_MAT_Steel_Grey: GENERIC_SMALL,
+  W_MAT_Steel_Galv: GENERIC_SMALL,
+  W_MAT_Rail_Rust: GENERIC_SMALL,
+  W_MAT_Wood_Fence: GENERIC_SMALL,
+  W_MAT_Wood_Bench: GENERIC_SMALL,
+};
 
 const BASE = import.meta.env.BASE_URL;
 
@@ -84,6 +110,7 @@ export function styleWorld(root, preset) {
       else if (m.name === 'W_MAT_Platform_Top') patchDeck(m, 'top', preset.bump);
       else if (m.name === 'W_MAT_Tactile_Yellow') patchDeck(m, 'yellow', preset.bump);
       else if (m.name === 'W_MAT_Wood_Post' || m.name === 'W_MAT_Wood_Dark') patchDeck(m, 'wood', preset.bump);
+      else if (GENERIC_MATS[m.name]) patchGeneric(m, preset.detail, preset.bump, GENERIC_MATS[m.name]);
     }
   });
 }

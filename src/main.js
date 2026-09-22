@@ -16,6 +16,8 @@ import { makeRain } from './weather.js';
 import { installFog } from './atmos.js';
 import { wetMats } from './fx.js';
 import { makePetals, makeGulls } from './critters.js';
+import { Pedestrians } from './people.js';
+import { Traffic } from './traffic.js';
 import { makeDeckPools } from './lights.js';
 import { StepFx } from './steps.js';
 import { Guide, makeBeacon } from './guide.js';
@@ -29,6 +31,8 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const ZERO = { x: 0, y: 0, run: false, sprint: false };
 const UP = new THREE.Vector3(0, 1, 0);
 const TIMES = ['day', 'dusk', 'night'];
+const PEOPLE_COUNT = [0, 6, 8]; // by preset.detail (low/medium/high+ultra): background NPCs are cheap, but low stays empty-scene-minimal
+const CAR_COUNT = [0, 4, 6];
 const isTouch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
 /** short taptic buzz for jump / alarm / train hit; a no-op where Vibration API isn't available (iOS Safari) */
 const vibrate = (pattern) => {
@@ -124,6 +128,8 @@ let treesGroup;
 let treesData;
 let sea;
 let glow;
+let pedestrians;
+let traffic;
 let ui;
 let input;
 let ready = false;
@@ -242,6 +248,10 @@ async function load() {
   train = new Train(trainG, worldRoot, meta);
   train.style(preset);
   scene.add(train.group);
+  pedestrians = new Pedestrians(ground, meta, PEOPLE_COUNT[preset.detail] ?? 0);
+  scene.add(pedestrians.group);
+  traffic = new Traffic(ground, meta, CAR_COUNT[preset.detail] ?? 0);
+  scene.add(traffic.group);
   const sp = meta.spawn;
   player = new Player(charG, ground, { x: sp.x, z: -sp.y, yaw: Math.atan2(-sp.x, sp.y) });
   stepFx = new StepFx(scene, ground);
@@ -310,6 +320,12 @@ function applyQuality(name) {
   disposeGroup(sea);
   sea = makeSea(ground, meta.sea_level, preset.seaDepth, preset.waves);
   scene.add(sea);
+  disposeGroup(pedestrians.group);
+  pedestrians = new Pedestrians(ground, meta, PEOPLE_COUNT[preset.detail] ?? 0);
+  scene.add(pedestrians.group);
+  disposeGroup(traffic.group);
+  traffic = new Traffic(ground, meta, CAR_COUNT[preset.detail] ?? 0);
+  scene.add(traffic.group);
   buildPointLights();
 }
 
@@ -771,6 +787,8 @@ function updateVisuals(dt) {
   petals.userData.set(!settings.reduceMotion, camera, pxScale, cur.night);
   gulls.userData.update(dt, cur.night, cur.lightColor);
   stepFx.update(dt, player, player.root.visible && !player.riding, cur.night, pxScale);
+  pedestrians.update(dt);
+  traffic.update(dt, cur.night);
 }
 
 // ---------------------------------------------------------------------------------------------------- camera
@@ -1059,6 +1077,8 @@ window.__enoden = {
   settings,
   get ui() { return ui; },
   get ground() { return ground; },
+  get pedestrians() { return pedestrians; },
+  get traffic() { return traffic; },
   setCam: (y, p, d) => {
     camYaw = y;
     camPitch = p;

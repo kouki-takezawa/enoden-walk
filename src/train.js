@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { makeAlarmGlow, makeBeam, makeSparks } from './lights.js';
-import { patchTrainLivery } from './fx.js';
+import { patchTrainLivery, patchGeneric } from './fx.js';
+import { makeTorsoGeometry } from './people.js';
 
 const LEN = 26.3; // two-car set, cab end at +x of the model (x = 0.6 at the origin)
 const CAB_X = 0.6;
@@ -72,6 +72,7 @@ export class Train {
     this.inner.add(this.head, this.head.target);
     this.passengers = this._passengers();
     this.inner.add(this.passengers);
+    this.inner.add(this._interior());
     this.beam = makeBeam();
     this.beam.position.set(CAB_X + 0.3, 1.5, 0);
     this.inner.add(this.beam);
@@ -85,29 +86,10 @@ export class Train {
   }
 
   /** A bit more than a "head + torso box" silhouette (shoulders read as shoulders, the head keeps a fixed skin
-   *  tone instead of taking on the clothing colour) while staying cheap enough for a couple dozen instances. */
+   *  tone instead of taking on the clothing colour) while staying cheap enough for a couple dozen instances.
+   *  Shares its geometry builder with the pedestrian crowd (people.js) — passengers are seated, so no legs. */
   _passengers() {
-    const tint = (geo, hex) => {
-      const g = geo.toNonIndexed();
-      const n = g.attributes.position.count;
-      const c = new THREE.Color(hex);
-      const arr = new Float32Array(n * 3);
-      for (let i = 0; i < n; i++) {
-        arr[i * 3] = c.r;
-        arr[i * 3 + 1] = c.g;
-        arr[i * 3 + 2] = c.b;
-      }
-      g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
-      return g;
-    };
-    const head = new THREE.SphereGeometry(0.105, 8, 6);
-    head.translate(0, 0.60, 0);
-    const shoulders = new THREE.BoxGeometry(0.44, 0.13, 0.25);
-    shoulders.translate(0, 0.415, 0);
-    const body = new THREE.BoxGeometry(0.32, 0.40, 0.21);
-    body.translate(0, 0.155, 0);
-    // head keeps a fixed skin tone (vertexColors * instanceColor) regardless of the per-passenger clothing hue below
-    const geo = mergeGeometries([tint(head, 0xd9a577), tint(shoulders, 0xffffff), tint(body, 0xffffff)]);
+    const geo = makeTorsoGeometry();
     const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, vertexColors: true });
     const slots = [];
     for (const cx of [CAB_X - 6.55, CAB_X - 20.55]) for (let k = -4; k <= 4; k++) for (const z of [-0.78, 0.78]) slots.push([cx + k * 1.28, z]);
@@ -129,12 +111,61 @@ export class Train {
     return im;
   }
 
-  /** liveried-paint weathering (see fx.js patchTrainLivery); call again on a quality-preset switch. */
+  /** liveried-paint weathering (see fx.js patchTrainLivery) + the interior materials' texture noise; call again on
+   *  a quality-preset switch. */
   style(preset) {
     for (const m of this.mats) {
       if (m.name === 'W_MAT_Enoden_Green') patchTrainLivery(m, preset.detail, true);
       else if (m.name === 'W_MAT_Enoden_Cream' || m.name === 'W_MAT_Train_Roof' || m.name === 'W_MAT_Train_Dark') patchTrainLivery(m, preset.detail, false);
+      else if (m.name === 'Interior_Seat') patchGeneric(m, preset.detail, preset.bump, { freq: 3.5, amp: 0.14, bumpFreq: 14.0, bumpAmp: 0.10 });
+      else if (m.name === 'Interior_Floor') patchGeneric(m, preset.detail, preset.bump, { freq: 4.0, amp: 0.20, bumpFreq: 10.0, bumpAmp: 0.12 });
     }
+  }
+
+  /** Phase N1: the car had no interior at all (a bare window pane with nothing behind it) — a few long bench
+   *  seats, floor, grab poles and a ceiling light strip, built once (not instanced: there is only ever one train). */
+  _interior() {
+    const g = new THREE.Group();
+    const seatMat = new THREE.MeshStandardMaterial({ color: 0x3a5f47, roughness: 0.85 }); // green moquette, typical of Japanese commuter trains
+    const floorMat = new THREE.MeshStandardMaterial({ color: 0x6b6a62, roughness: 0.88 });
+    const poleMat = new THREE.MeshStandardMaterial({ color: 0xcfd3d6, roughness: 0.3, metalness: 0.7 });
+    const lampMat = new THREE.MeshStandardMaterial({ color: 0xfff3d6, roughness: 0.6, emissive: 0xfff3d6, emissiveIntensity: 0.35 });
+    seatMat.name = 'Interior_Seat';
+    floorMat.name = 'Interior_Floor';
+    this.mats.add(seatMat).add(floorMat);
+
+    const seatGeo = new THREE.BoxGeometry(4.6, 0.42, 0.46);
+    const backGeo = new THREE.BoxGeometry(4.6, 0.5, 0.08);
+    const poleGeo = new THREE.CylinderGeometry(0.022, 0.022, 1.55, 8);
+    const lampGeo = new THREE.BoxGeometry(4.2, 0.05, 0.16);
+    for (const cx of [CAB_X - 6.55, CAB_X - 20.55]) {
+      for (const sy of [-1, 1]) {
+        const seat = new THREE.Mesh(seatGeo, seatMat);
+        seat.position.set(cx, 1.07 + 0.22, sy * 1.00);
+        seat.castShadow = seat.receiveShadow = true;
+        g.add(seat);
+        const back = new THREE.Mesh(backGeo, seatMat);
+        back.position.set(cx, 1.07 + 0.58, sy * 1.17);
+        back.receiveShadow = true;
+        g.add(back);
+      }
+      for (const dx of [-4.6, 0, 4.6]) {
+        for (const sy of [-1, 1]) {
+          const pole = new THREE.Mesh(poleGeo, poleMat);
+          pole.position.set(cx + dx, 1.07 + 0.78, sy * 1.10);
+          pole.castShadow = true;
+          g.add(pole);
+        }
+      }
+      const lamp = new THREE.Mesh(lampGeo, lampMat);
+      lamp.position.set(cx, 3.30, 0);
+      g.add(lamp);
+    }
+    const floor = new THREE.Mesh(new THREE.BoxGeometry(LEN - 1.2, 0.06, 2.18), floorMat);
+    floor.position.set(CAB_X - LEN / 2 + 0.6, 1.04, 0);
+    floor.receiveShadow = true;
+    g.add(floor);
+    return g;
   }
 
   place() {

@@ -221,6 +221,43 @@ export function patchAsphalt(mat, detail, bump) {
   mat.needsUpdate = true;
 }
 
+/** Generic small-prop / secondary-surface weathering (roofs, concrete, stone, steel, wood fences and benches, rusty
+ *  rail...): the same "blotchy colour + normal/roughness noise" recipe as the wall/terrain/road patches above, but
+ *  without any material-specific pattern (no window grid, no puddle logic) — most of the 53 materials this project
+ *  builds in Blender only need *some* texture breakup to stop looking like a single flat colour, not a bespoke
+ *  shader, so one parametrised function covers all of them instead of writing one function per material. */
+export function patchGeneric(mat, detail, bump, { freq = 1.2, amp = 0.22, bumpFreq = 6.0, bumpAmp = 0.18 } = {}) {
+  // GLSL ES has no implicit int->float conversion for overload resolution, and JS stringifies a whole-number float
+  // (e.g. 9.0) as "9" — silently producing an int literal that fails to link against a `float` parameter. Every
+  // runtime-configured number reaching the shader source below must go through this.
+  const f = (n) => (Number.isInteger(n) ? n.toFixed(1) : String(n));
+  mat.customProgramCacheKey = () => `generic${detail}${bump ? 'b' : ''}${freq}`;
+  mat.onBeforeCompile = (shader) => {
+    inject(shader, 'varying vec3 vWPos;', 'vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;', 'varying vec3 vWPos;', [
+      [
+        '#include <color_fragment>',
+        detail > 0
+          ? `{
+          float n1 = fxNoise(vWPos.xz * ${f(freq)} + vWPos.y * ${f(freq)});
+          float n2 = fxNoise(vWPos.xz * ${f(freq * 6.0)} + 5.0);
+          diffuseColor.rgb *= 1.0 - ${f(amp)} * 0.5 + ${f(amp)} * n1 + ${f(amp)} * 0.3 * (n2 - 0.5);
+        }`
+          : '',
+      ],
+      ...(bump
+        ? [
+            [
+              '#include <normal_fragment_maps>',
+              `normal = fxBump(normal, vWPos, fxNoise2(vWPos.xz * ${f(bumpFreq)} + vWPos.y * ${f(bumpFreq)}), ${f(bumpAmp)});`,
+            ],
+            ['#include <roughnessmap_fragment>', `roughnessFactor = clamp(roughnessFactor + (fxRoughNoise(vWPos, ${f(bumpFreq)}) - 0.5) * 0.14, 0.05, 0.95);`],
+          ]
+        : []),
+    ]);
+  };
+  mat.needsUpdate = true;
+}
+
 /** platform deck / wooden posts / tactile strip: grime, worn yellow paint, dirty column bases, wet patches (all confined to the deck's world box).
  *  `bump` (ultra preset only) adds plank/grain normal perturbation on top, faded out on wet patches. */
 export function patchDeck(mat, kind, bump) {
