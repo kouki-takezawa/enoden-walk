@@ -109,7 +109,7 @@ export function makeGradePass() {
       uAspect: { value: 1 },
       uTime: { value: 0 },
       uCA: { value: 0.0016 },
-      uGrain: { value: 0.018 },
+      uGrain: { value: 0.010 },
     },
     vertexShader: /* glsl */ `
       varying vec2 vUv;
