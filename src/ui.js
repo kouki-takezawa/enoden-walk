@@ -432,6 +432,7 @@ export class UI {
       body = `<h2>${t('settings')}</h2>
         <label>${t('time')} ${sel('sTime', [['day', t('day')], ['dusk', t('dusk')], ['night', t('night')]], this.s.time)}</label>
         <label>${t('quality')} ${sel('sQuality', [['auto', t('q_auto')], ['low', t('q_low')], ['medium', t('q_medium')], ['high', t('q_high')], ['ultra', t('q_ultra')]], this.s.quality)}</label>
+        ${this.s.quality === 'ultra' ? `<label><input id="sDof" type="checkbox" ${this.s.dof ? 'checked' : ''}> ${t('dof')}</label>` : ''}
         ${this.s.quality === 'ultra' ? `<label><input id="sMotionBlur" type="checkbox" ${this.s.motionBlur ? 'checked' : ''}> ${t('motionBlur')}</label>` : ''}
         <label>${t('volume')} <input id="sVol" type="range" min="0" max="1" step="0.05" value="${this.s.volume}"></label>
         <label><input id="sMute" type="checkbox" ${this.s.muted ? 'checked' : ''}> ${t('mute')}</label>
@@ -470,6 +471,7 @@ export class UI {
       this.openModal('settings'); // re-render: the motion-blur toggle only shows for the ultra preset
     });
     on('sMotionBlur', 'change', (e) => this._set('motionBlur', e.target.checked));
+    on('sDof', 'change', (e) => this._set('dof', e.target.checked));
     on('sVol', 'input', (e) => this._set('volume', +e.target.value));
     on('sMute', 'change', (e) => this._set('muted', e.target.checked));
     on('sView', 'change', (e) => this._set('viewMode', e.target.value));

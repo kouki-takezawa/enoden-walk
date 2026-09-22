@@ -8,15 +8,15 @@ export const PRESETS = {
   low: { dpr: 1.0, shadow: 1024, shadowRange: 34, bloom: false, msaa: 0, leafCards: false, detail: 0, clouds: false, wind: false, pointLights: 1, seaDepth: false, glow: true, bump: false, ssao: false, dof: false, motionBlur: false, smaa: true, atmos: false, waves: false, flutter: false, skyPhysical: false },
   medium: { dpr: 1.25, shadow: 2048, shadowRange: 50, bloom: true, msaa: 0, leafCards: true, detail: 1, clouds: true, wind: true, pointLights: 2, seaDepth: true, glow: true, bump: false, ssao: false, dof: false, motionBlur: false, smaa: true, atmos: true, waves: false, flutter: false, skyPhysical: false },
   high: { dpr: 1.75, shadow: 4096, shadowRange: 70, bloom: true, msaa: 4, leafCards: true, detail: 2, clouds: true, wind: true, pointLights: 4, seaDepth: true, glow: true, bump: false, ssao: false, dof: false, motionBlur: false, smaa: true, atmos: true, waves: false, flutter: false, skyPhysical: false },
-  // charShadow (C5.3): a real second shadow-only light would double-light the character in three.js's standard
-  // pipeline (there is no per-object "light layer" exclusion for illumination, only for shadow-map culling), so
-  // this doubles the shared shadow map's resolution instead (8192 vs 4096) — same "crisper self-shadow" result,
-  // without the risk of a visible brightness seam around the character.
-  ultra: { dpr: 1.75, shadow: 8192, shadowRange: 70, bloom: true, msaa: 4, leafCards: true, detail: 2, clouds: true, wind: true, pointLights: 4, seaDepth: true, glow: true, bump: true, ssao: true, dof: true, motionBlur: true, smaa: true, atmos: true, waves: true, flutter: true, skyPhysical: true },
+  // shadow / msaa deliberately match `high`, not higher: an 8192 shadow map + 4x MSAA on top of SSAO/DOF was the
+  // main reason `ultra` was too heavy to be a safe default. SMAA already covers edge AA at this tier, so 2x MSAA
+  // (mainly there for alpha-tested foliage) is enough; GTAOPass runs at half resolution (see render.js) and both
+  // DOF and motion blur are opt-in (default off) rather than always-on, since each is a full extra scene pass.
+  ultra: { dpr: 1.75, shadow: 4096, shadowRange: 70, bloom: true, msaa: 2, leafCards: true, detail: 2, clouds: true, wind: true, pointLights: 4, seaDepth: true, glow: true, bump: true, ssao: true, dof: true, motionBlur: true, smaa: true, atmos: true, waves: true, flutter: true, skyPhysical: true },
 };
 
 export const DEFAULTS = {
-  quality: 'high', // auto | low | medium | high
+  quality: 'ultra', // auto | low | medium | high | ultra — see the comment on autoPreset() for why a fixed preset (not 'auto') is the default
   time: 'dusk', // day | dusk | night
   volume: 0.8,
   muted: false,
@@ -30,6 +30,7 @@ export const DEFAULTS = {
   autoTime: false, // day -> dusk -> night cycle
   rain: false,
   motionBlur: false, // ultra quality only; off by default even there (motion-sickness risk)
+  dof: false, // ultra quality only; off by default even there (a full extra depth pass, the 2nd heaviest ultra effect after SSAO)
   reduceMotion: typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches,
   handed: 'right', // right | left — which side the touch move-stick sits on
 };
@@ -52,14 +53,18 @@ export function saveSettings(s) {
   }
 }
 
-/** auto preset: touch devices / weak CPUs / slow or data-saver connections start on low, everything else on medium (the frame-time governor adapts the resolution) */
+// DEFAULTS.quality is a fixed preset ('ultra'), not 'auto': the frame-time governor (Renderer.tick — it scales
+// pixel ratio down, and applyQuality's own step-down chain in main.js falls back through high -> medium -> low)
+// already protects weak devices at runtime, so auto-detection only matters for the 'auto' *setting*, which a user
+// has to opt into explicitly. Touch devices / weak CPUs / slow connections still start on low there.
 export function autoPreset() {
   const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
   const cores = navigator.hardwareConcurrency || 4;
   const conn = navigator.connection;
   const slowNet = conn && (conn.saveData || /^(slow-2g|2g|3g)$/.test(conn.effectiveType || ''));
   if (coarse || cores <= 4 || slowNet) return 'low';
-  return cores >= 12 ? 'high' : 'medium';
+  if (cores >= 12) return 'ultra';
+  return cores >= 6 ? 'high' : 'medium';
 }
 
 const STR = {
@@ -93,6 +98,7 @@ const STR = {
     q_high: '高',
     q_ultra: '最高',
     motionBlur: 'モーションブラー',
+    dof: '被写界深度(ぼかし)',
     volume: '音量',
     mute: 'ミュート',
     sens: '視点の感度',
@@ -217,6 +223,7 @@ const STR = {
     q_high: 'High',
     q_ultra: 'Ultra',
     motionBlur: 'Motion blur',
+    dof: 'Depth of field (blur)',
     volume: 'Volume',
     mute: 'Mute',
     sens: 'Look sensitivity',

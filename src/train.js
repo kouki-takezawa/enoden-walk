@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { makeAlarmGlow, makeBeam, makeSparks } from './lights.js';
+import { patchTrainLivery } from './fx.js';
 
 const LEN = 26.3; // two-car set, cab end at +x of the model (x = 0.6 at the origin)
 const CAB_X = 0.6;
@@ -83,13 +84,31 @@ export class Train {
     this.setLamps(false, 0);
   }
 
+  /** A bit more than a "head + torso box" silhouette (shoulders read as shoulders, the head keeps a fixed skin
+   *  tone instead of taking on the clothing colour) while staying cheap enough for a couple dozen instances. */
   _passengers() {
-    const head = new THREE.SphereGeometry(0.11, 8, 6);
-    head.translate(0, 0.62, 0);
-    const body = new THREE.BoxGeometry(0.36, 0.55, 0.24);
-    body.translate(0, 0.2, 0);
-    const geo = mergeGeometries([head.toNonIndexed(), body.toNonIndexed()]);
-    const mat = new THREE.MeshStandardMaterial({ color: 0x2c2f3a, roughness: 0.9 });
+    const tint = (geo, hex) => {
+      const g = geo.toNonIndexed();
+      const n = g.attributes.position.count;
+      const c = new THREE.Color(hex);
+      const arr = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) {
+        arr[i * 3] = c.r;
+        arr[i * 3 + 1] = c.g;
+        arr[i * 3 + 2] = c.b;
+      }
+      g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+      return g;
+    };
+    const head = new THREE.SphereGeometry(0.105, 8, 6);
+    head.translate(0, 0.60, 0);
+    const shoulders = new THREE.BoxGeometry(0.44, 0.13, 0.25);
+    shoulders.translate(0, 0.415, 0);
+    const body = new THREE.BoxGeometry(0.32, 0.40, 0.21);
+    body.translate(0, 0.155, 0);
+    // head keeps a fixed skin tone (vertexColors * instanceColor) regardless of the per-passenger clothing hue below
+    const geo = mergeGeometries([tint(head, 0xd9a577), tint(shoulders, 0xffffff), tint(body, 0xffffff)]);
+    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, vertexColors: true });
     const slots = [];
     for (const cx of [CAB_X - 6.55, CAB_X - 20.55]) for (let k = -4; k <= 4; k++) for (const z of [-0.78, 0.78]) slots.push([cx + k * 1.28, z]);
     const im = new THREE.InstancedMesh(geo, mat, slots.length);
@@ -108,6 +127,14 @@ export class Train {
     im.count = n;
     im.frustumCulled = false;
     return im;
+  }
+
+  /** liveried-paint weathering (see fx.js patchTrainLivery); call again on a quality-preset switch. */
+  style(preset) {
+    for (const m of this.mats) {
+      if (m.name === 'W_MAT_Enoden_Green') patchTrainLivery(m, preset.detail, true);
+      else if (m.name === 'W_MAT_Enoden_Cream' || m.name === 'W_MAT_Train_Roof' || m.name === 'W_MAT_Train_Dark') patchTrainLivery(m, preset.detail, false);
+    }
   }
 
   place() {

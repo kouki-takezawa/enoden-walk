@@ -21,7 +21,7 @@ import { StepFx } from './steps.js';
 import { Guide, makeBeacon } from './guide.js';
 
 installFog(); // must run before any material compiles
-import { makeLoaders, makeEnvironment, tunePBR, styleWorld } from './world.js';
+import { makeLoaders, makeEnvironment, tunePBR, styleWorld, styleCharacter } from './world.js';
 
 const BASE = import.meta.env.BASE_URL;
 const $ = (id) => document.getElementById(id);
@@ -67,6 +67,7 @@ try {
 }
 const gl = renderer.gl;
 renderer.setMotionBlur(settings.quality === 'ultra' && settings.motionBlur);
+renderer.setDof(settings.quality === 'ultra' && settings.dof);
 const hemi = new THREE.HemisphereLight(0xffffff, 0x888888, 0.6);
 const sunLight = new THREE.DirectionalLight(0xffffff, 3);
 sunLight.castShadow = true;
@@ -239,6 +240,7 @@ async function load() {
   buildPointLights();
 
   train = new Train(trainG, worldRoot, meta);
+  train.style(preset);
   scene.add(train.group);
   const sp = meta.spawn;
   player = new Player(charG, ground, { x: sp.x, z: -sp.y, yaw: Math.atan2(-sp.x, sp.y) });
@@ -249,6 +251,7 @@ async function load() {
     stepFx.step(surf, speed, player);
   };
   player.setDetail(preset.detail);
+  styleCharacter(player.model, preset);
   scene.add(player.root);
   camYaw = player.yaw + Math.PI;
 
@@ -302,6 +305,8 @@ function applyQuality(name) {
   scene.add(treesGroup);
   updateTreeLOD(treesGroup, player.pos.x, player.pos.z, preset.shadowRange);
   player.setDetail(preset.detail);
+  styleCharacter(player.model, preset);
+  train.style(preset);
   disposeGroup(sea);
   sea = makeSea(ground, meta.sea_level, preset.seaDepth, preset.waves);
   scene.add(sea);
@@ -541,6 +546,7 @@ const hooks = {
       sound.applyVolume();
     } else if (key === 'viewMode' && settings.viewMode !== 'lock') document.exitPointerLock?.();
     else if (key === 'motionBlur') renderer.setMotionBlur(settings.motionBlur);
+    else if (key === 'dof') renderer.setDof(settings.dof);
     else if (key === 'lang') {
       ui.lastWhere = '';
       ui.lastTrain = '';
@@ -979,7 +985,8 @@ function frame(now) {
     if (renderer.ema > 27 && renderer.dpr <= renderer.baseDpr * 0.7) slow += dt;
     else slow = Math.max(0, slow - dt);
     if (slow > 5 && level !== 'low') {
-      applyQuality(level === 'high' ? 'medium' : 'low');
+      const STEP_DOWN = { ultra: 'high', high: 'medium', medium: 'low' };
+      applyQuality(STEP_DOWN[level] ?? 'low');
       ui.showMsg(t('quality_now', { q: t(`q_${level}`) }), 2500);
       slow = 0;
     }

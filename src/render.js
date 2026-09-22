@@ -31,6 +31,7 @@ export class Renderer {
     this.dpr = 1;
     this.composer = null;
     this.motionBlurOn = false;
+    this.dofOn = false;
     this.apply(preset);
   }
 
@@ -66,7 +67,9 @@ export class Renderer {
       this.composer.addPass(this.bloom);
     }
     if (p.ssao && this.scene && this.camera) {
-      this.ssao = new GTAOPass(this.scene, this.camera, size.x, size.y, undefined, { radius: 2, distanceExponent: 1, thickness: 1 });
+      // half-res: AO is low-frequency, so the softer edges from upscaling are not visible, and this quarters both
+      // the extra normal-buffer scene pass and the AO/denoise shading cost (the single heaviest part of `ultra`).
+      this.ssao = new GTAOPass(this.scene, this.camera, size.x * 0.5, size.y * 0.5, undefined, { radius: 2, distanceExponent: 1, thickness: 1 });
       this.ssao.output = GTAOPass.OUTPUT.Default;
       this.ssao.blendIntensity = 0.85;
       this.gtaoBox = new THREE.Box3();
@@ -78,7 +81,10 @@ export class Renderer {
       this.composer.addPass(this.atmos);
     }
     if (p.dof && this.scene && this.camera) {
+      // off by default even on ultra (a full extra depth-only scene pass is the second heaviest thing here,
+      // after SSAO) — the settings toggle turns it on, mirroring motion blur below.
       this.dof = new BokehPass(this.scene, this.camera, { focus: 6, aperture: 0.012, maxblur: 0.006 });
+      this.dof.enabled = this.dofOn;
       this.composer.addPass(this.dof);
     }
     if (p.smaa) this.composer.addPass(new SMAAPass(size.x, size.y));
@@ -98,6 +104,12 @@ export class Renderer {
     if (this.afterimage) this.afterimage.enabled = on;
   }
 
+  /** ultra-only, and off by default even there (a full extra depth pass): the settings toggle drives this independently of the preset. */
+  setDof(on) {
+    this.dofOn = on;
+    if (this.dof) this.dof.enabled = on;
+  }
+
   /** keeps the GTAO pass's clip box (needed for depth precision against a 150 km far plane) centred on the player. */
   updateAoBox(center, half = 120) {
     if (!this.gtaoBox) return;
@@ -109,10 +121,19 @@ export class Renderer {
     if (this.dof) this.dof.uniforms.focus.value = dist;
   }
 
+  /** EffectComposer.setSize() resizes every pass to the *full* effective resolution, undoing GTAOPass's
+   *  deliberately-smaller buffers from buildComposer() — so, like the bloom resolution line below, this has to be
+   *  re-applied after every composer resize (both here and in setDpr(), since the DPR governor calls this a lot). */
+  _syncSsaoSize() {
+    if (!this.ssao) return;
+    this.ssao.setSize(innerWidth * this.dpr * 0.5, innerHeight * this.dpr * 0.5);
+  }
+
   resize() {
     this.gl.setSize(innerWidth, innerHeight);
     if (this.composer) this.composer.setSize(innerWidth, innerHeight);
     if (this.bloom) this.bloom.resolution.set(innerWidth * 0.5, innerHeight * 0.5);
+    this._syncSsaoSize();
   }
 
   setDpr(d) {
@@ -123,6 +144,7 @@ export class Renderer {
       this.composer.setSize(innerWidth, innerHeight);
     }
     if (this.bloom) this.bloom.resolution.set(innerWidth * 0.5, innerHeight * 0.5);
+    this._syncSsaoSize();
   }
 
   /** call once per frame with the raw frame time (s) */
