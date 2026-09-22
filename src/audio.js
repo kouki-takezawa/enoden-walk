@@ -11,6 +11,8 @@ export class Sound {
     this.flip = false;
     this.nextClack = 0;
     this.nextCricket = 0;
+    this.announceOn = true;
+    this.nextGull = 6;
   }
 
   init() {
@@ -20,6 +22,12 @@ export class Sound {
     this.ctx = new AC();
     this.master = this.ctx.createGain();
     this.master.connect(this.ctx.destination);
+    // platform canopy reverb: a short synthetic room, sent to only while the player stands on the deck
+    this.verb = this.ctx.createConvolver();
+    this.verb.buffer = this._impulse(1.5);
+    this.wet = this.ctx.createGain();
+    this.wet.gain.value = 0;
+    this.master.connect(this.wet).connect(this.verb).connect(this.ctx.destination);
     this.applyVolume();
     // shared 1.5 s noise buffer (brown-ish) for every noise based sound
     const len = Math.floor(this.ctx.sampleRate * 1.5);
@@ -37,6 +45,33 @@ export class Sound {
     this.wind = this._loop(this.white, 'bandpass', 420, 0.07);
     this.rumble = this._loop(this.noise, 'lowpass', 180, 0.3);
     this.rumble.g.gain.value = 0;
+    this.rain = this._loop(this.white, 'bandpass', 3200, 0.2);
+    this.dopp = 0;
+  }
+
+  _impulse(sec) {
+    const n = Math.floor(this.ctx.sampleRate * sec);
+    const b = this.ctx.createBuffer(2, n, this.ctx.sampleRate);
+    for (let c = 0; c < 2; c++) {
+      const d = b.getChannelData(c);
+      for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 3.2);
+    }
+    return b;
+  }
+
+  /** spoken announcement (Web Speech API; silently skipped where unavailable or muted) */
+  announce(text, lang) {
+    if (!this.announceOn || this.muted || this.volume <= 0 || typeof speechSynthesis === 'undefined' || !window.SpeechSynthesisUtterance) return;
+    try {
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = lang === 'en' ? 'en-US' : 'ja-JP';
+      u.volume = clamp(this.volume, 0, 1);
+      u.rate = 0.95;
+      speechSynthesis.cancel();
+      speechSynthesis.speak(u);
+    } catch {
+      /* no voice available */
+    }
   }
 
   _loop(buf, type, freq, lfoHz) {
@@ -56,7 +91,7 @@ export class Sound {
     lfo.start();
     src.connect(f).connect(g).connect(this.master);
     src.start(0, Math.random());
-    return { g, f };
+    return { g, f, src };
   }
 
   applyVolume() {
@@ -103,6 +138,30 @@ export class Sound {
     }
   }
 
+  /** a distant gull: two falling whistles */
+  gull(vol) {
+    const t0 = this.ctx.currentTime;
+    for (let k = 0; k < 2 + (Math.random() < 0.5 ? 1 : 0); k++) {
+      const t = t0 + k * 0.32;
+      const o = this.ctx.createOscillator();
+      o.type = 'sawtooth';
+      const f = 1500 + Math.random() * 300;
+      o.frequency.setValueAtTime(f, t);
+      o.frequency.exponentialRampToValueAtTime(f * 0.62, t + 0.28);
+      const bp = this.ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = 1900;
+      bp.Q.value = 3;
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(vol, t + 0.05);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+      o.connect(bp).connect(g).connect(this.master);
+      o.start(t);
+      o.stop(t + 0.32);
+    }
+  }
+
   kan(vol, f) {
     const t = this.ctx.currentTime;
     const g = this.ctx.createGain();
@@ -122,7 +181,7 @@ export class Sound {
   }
 
   /**
-   * s: {alarm, crossDist, sea (0..1), night (0..1), trainSpeed, trainDist, riding}
+   * s: {alarm, crossDist, sea (0..1), night (0..1), trainSpeed, trainDist, riding, approach (-1 receding .. 1 approaching), deck (0..1), rain (0..1)}
    */
   update(s) {
     if (!this.ctx) return;
@@ -135,6 +194,11 @@ export class Sound {
     const sp = s.trainSpeed / 11;
     this.rumble.g.gain.value = near * sp * (s.riding ? 0.34 : 0.28);
     this.rumble.f.frequency.value = 120 + 140 * sp;
+    // Doppler: the rumble's pitch leans up while the train approaches and down while it leaves
+    this.dopp += ((s.riding ? 0 : s.approach || 0) - this.dopp) * 0.15;
+    this.rumble.src.playbackRate.value = 1 + 0.09 * this.dopp * near;
+    this.wet.gain.value += ((s.deck || 0) * 0.3 - this.wet.gain.value) * 0.1;
+    this.rain.g.gain.value = 0.08 * (s.rain || 0);
     if (sp > 0.05 && near > 0.02 && now >= this.nextClack) {
       this._burst(this.white, 'bandpass', 900, 2.0, 0.05 * near * (0.4 + sp), 0.07);
       this.nextClack = now + clamp(0.42 / Math.max(sp, 0.15), 0.12, 1.4);
@@ -144,6 +208,10 @@ export class Sound {
       if (vol > 0.002) this.kan(vol, this.flip ? 1230 : 1580);
       this.flip = !this.flip;
       this.nextKan = now + 0.5;
+    }
+    if (s.sea > 0.15 && s.night < 0.5 && !s.riding && now >= this.nextGull) {
+      this.gull(0.03 + 0.05 * s.sea);
+      this.nextGull = now + 7 + Math.random() * 14;
     }
     if (s.night > 0.5 && now >= this.nextCricket) {
       const f = 4300 + Math.random() * 500;

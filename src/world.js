@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { makeSky } from './sky.js';
-import { patchBuildingWall, patchTerrain, patchAsphalt, farLandMaterial } from './fx.js';
+import { patchBuildingWall, patchTerrain, patchAsphalt, patchDeck, farLandMaterial } from './fx.js';
 
 const BASE = import.meta.env.BASE_URL;
 
@@ -51,6 +51,12 @@ export function tunePBR(root) {
       } else {
         m.envMapIntensity = 0.7;
       }
+      if (m.name === 'W_MAT_Rail_Shiny') {
+        // polished rail heads catch the low sun and the sky
+        m.metalness = 0.92;
+        m.roughness = 0.2;
+        m.envMapIntensity = 2.0;
+      }
     }
   });
 }
@@ -75,6 +81,9 @@ export function styleWorld(root, preset) {
       if (m.name === 'W_MAT_Building_Wall#w') patchBuildingWall(m, preset.detail);
       else if (m.name === 'W_MAT_Terrain#w') patchTerrain(m, preset.detail);
       else if (m.name === 'W_MAT_Asphalt_Real' || m.name === 'W_MAT_Asphalt_Patch') patchAsphalt(m, preset.detail);
+      else if (m.name === 'W_MAT_Platform_Top') patchDeck(m, 'top');
+      else if (m.name === 'W_MAT_Tactile_Yellow') patchDeck(m, 'yellow');
+      else if (m.name === 'W_MAT_Wood_Post' || m.name === 'W_MAT_Wood_Dark') patchDeck(m, 'wood');
     }
   });
 }

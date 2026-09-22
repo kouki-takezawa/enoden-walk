@@ -90,18 +90,22 @@ export function makeSky(clouds = true) {
 
 // ---------------------------------------------------------------------------------------------------- time of day
 const c = (h) => new THREE.Color(h);
+const lin = (r, g, b) => new THREE.Color().setRGB(r, g, b); // linear multipliers for the grade
 export const TOD = {
   day: {
     sunAz: 205, sunEl: 52, lightColor: c(0xfff3e0), lightI: 3.0, hemiSky: c(0xcfe4ff), hemiGround: c(0x857f6a), hemiI: 0.9,
     fog: c(0xc9dcec), fogD: 0.0006, exposure: 1.0, envI: 0.65, zen: c(0x2f6bcc), mid: c(0x8db8e6), hor: c(0xcfe0ee), cloud: 0.75, night: 0, glow: 0,
+    gradeHi: lin(1.03, 1.0, 0.96), gradeSh: lin(0.97, 0.99, 1.03), sat: 1.06, vig: 0.15, shaft: 0.10, flare: 0.5, fogSun: 0.10,
   },
   dusk: {
     sunAz: 225, sunEl: 12, lightColor: c(0xffd6a8), lightI: 3.4, hemiSky: c(0xffe6cc), hemiGround: c(0x8a7560), hemiI: 0.6,
     fog: c(0xe9c6a0), fogD: 0.00085, exposure: 1.15, envI: 0.55, zen: c(0x436bb8), mid: c(0xcdb8bd), hor: c(0xffb880), cloud: 0.6, night: 0, glow: 0.15,
+    gradeHi: lin(1.08, 1.0, 0.88), gradeSh: lin(0.95, 1.0, 1.07), sat: 1.13, vig: 0.20, shaft: 0.30, flare: 0.7, fogSun: 0.45,
   },
   night: {
     sunAz: 225, sunEl: -22, lightColor: c(0x9fb4ff), lightI: 0.7, hemiSky: c(0x2a3b66), hemiGround: c(0x0e1424), hemiI: 0.55,
     fog: c(0x0c1428), fogD: 0.0012, exposure: 1.7, envI: 0.35, zen: c(0x03060f), mid: c(0x0a1226), hor: c(0x1a2038), cloud: 0.35, night: 1, glow: 1,
+    gradeHi: lin(0.96, 1.0, 1.10), gradeSh: lin(0.90, 0.97, 1.13), sat: 0.96, vig: 0.26, shaft: 0, flare: 0, fogSun: 0,
   },
 };
 const MOON = dirFrom(140, 38);
@@ -167,7 +171,14 @@ export class TimeOfDay {
     u.uCloud.value = s.cloud;
     u.uSunGlow.value = sunUp;
     U.uNight.value = s.night;
-    if (this.glowPoints) this.glowPoints.material.opacity = Math.max(0, s.glow) * 0.7;
+    // fog in-scattering colour (warm at a low sun) and sea glitter follow the sun's height
+    const low = 1 - THREE.MathUtils.smoothstep(s.sunEl, 10, 40);
+    U.uSunCol.value.set(1.0, 0.95 - 0.35 * low, 0.85 - 0.55 * low).multiplyScalar(s.fogSun * sunUp);
+    U.uGlit.value = sunUp * (1 - s.night);
+    if (this.glowPoints) {
+      this.glowPoints.material.opacity = Math.max(0, s.glow) * 0.7;
+      this.glowPoints.userData.halo.opacity = Math.max(0, s.glow) * 0.16;
+    }
   }
 
   update(dt, player) {
@@ -237,7 +248,23 @@ export function makeLampGlow(lampsPos) {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(lampsPos.flat(), 3));
   const mat = new THREE.PointsMaterial({ map: tex, size: 2.4, sizeAttenuation: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0, fog: false });
+  const flicker = (m) => {
+    m.customProgramCacheKey = () => 'lampglow';
+    m.onBeforeCompile = (shader) => {
+      shader.uniforms.uTime = U.uTime;
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nuniform float uTime;')
+        .replace('#include <fog_vertex>', 'gl_PointSize *= 0.93 + 0.07 * sin(uTime * 6.5 + position.x * 3.1 + position.z * 5.3) * sin(uTime * 2.3 + position.x * 1.7);\n#include <fog_vertex>');
+    };
+  };
+  flicker(mat);
   const pts = new THREE.Points(geo, mat);
   pts.frustumCulled = false;
+  const haloMat = new THREE.PointsMaterial({ map: tex, size: 9, sizeAttenuation: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0, fog: false });
+  flicker(haloMat);
+  const halo = new THREE.Points(geo, haloMat);
+  halo.frustumCulled = false;
+  pts.add(halo);
+  pts.userData.halo = haloMat;
   return pts;
 }

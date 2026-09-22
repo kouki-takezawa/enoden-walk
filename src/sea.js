@@ -70,11 +70,14 @@ export function makeSea(ground, level, useDepth) {
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uTime = U.uTime;
     shader.uniforms.uNight = U.uNight;
+    shader.uniforms.uGlit = U.uGlit;
+    shader.uniforms.uSunView = U.uSunView; // declared by the fog chunk
+    shader.uniforms.uSunCol = U.uSunCol;
     shader.uniforms.uDepth = { value: depthTex };
     shader.uniforms.uGrid = { value: new THREE.Vector4(ground.x0, ground.y0, ground.nx * ground.step, ground.ny * ground.step) };
     shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWPos;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform float uTime; uniform float uNight; uniform sampler2D uDepth; uniform vec4 uGrid; varying vec3 vWPos;\nfloat seaHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }\nfloat seaNoise(vec2 p) { vec2 i = floor(p); vec2 f = fract(p); f = f * f * (3.0 - 2.0 * f); return mix(mix(seaHash(i), seaHash(i + vec2(1.0, 0.0)), f.x), mix(seaHash(i + vec2(0.0, 1.0)), seaHash(i + vec2(1.0, 1.0)), f.x), f.y); }')
+      .replace('#include <common>', '#include <common>\nuniform float uTime; uniform float uNight; uniform float uGlit; uniform sampler2D uDepth; uniform vec4 uGrid; varying vec3 vWPos;\nfloat seaHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }\nfloat seaNoise(vec2 p) { vec2 i = floor(p); vec2 f = fract(p); f = f * f * (3.0 - 2.0 * f); return mix(mix(seaHash(i), seaHash(i + vec2(1.0, 0.0)), f.x), mix(seaHash(i + vec2(0.0, 1.0)), seaHash(i + vec2(1.0, 1.0)), f.x), f.y); }')
       .replace(
         '#include <color_fragment>',
         `#include <color_fragment>
@@ -94,10 +97,23 @@ export function makeSea(ground, level, useDepth) {
           float sn1 = seaNoise(vWPos.xz * 0.6);
           float band = sin(d * 2.6 - uTime * 1.1 + sn1 * 4.0);
           float lines = smoothstep(0.55, 0.95, band) * smoothstep(3.2, 0.5, d) * 0.55;
-          float foam = clamp(smoothstep(0.5, 0.0, d) + lines, 0.0, 1.0) * (0.75 + 0.25 * seaNoise(vWPos.xz * 3.0 + uTime * 0.2));
+          float crest = smoothstep(0.80, 1.0, seaNoise(vWPos.xz * vec2(0.45, 1.2) + vec2(uTime * 0.12, 0.0))) * 0.30 * smoothstep(1.2, 4.5, d) * (1.0 - uNight * 0.7);
+          float foam = clamp(smoothstep(0.5, 0.0, d) + lines + crest, 0.0, 1.0) * (0.75 + 0.25 * seaNoise(vWPos.xz * 3.0 + uTime * 0.2));
           diffuseColor.rgb = mix(wc, vec3(0.92, 0.96, 0.98), foam * 0.85);
         }`
             : ''
+        }`,
+      )
+      .replace(
+        '#include <emissivemap_fragment>',
+        `#include <emissivemap_fragment>
+        {
+          // sun glitter: twinkling facets where the reflected view ray points at the sun
+          vec3 gV = normalize(vViewPosition);
+          vec3 gR = reflect(-gV, normal);
+          float tw = seaNoise(vWPos.xz * 5.0 + vec2(uTime * 0.8, -uTime * 0.6)) * 0.6 + seaNoise(vWPos.xz * 11.0 - uTime * 1.3) * 0.4;
+          float gl = pow(max(dot(gR, uSunView), 0.0), 70.0) * smoothstep(0.52, 0.80, tw);
+          totalEmissiveRadiance += uSunCol * (gl * 9.0 * uGlit) / max(length(uSunCol), 0.05) * 0.35;
         }`,
       );
   };

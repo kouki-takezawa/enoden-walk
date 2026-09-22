@@ -13,6 +13,8 @@
   <meta property="og:url" content="https://enoden-walk.vercel.app/" />
   <meta name="twitter:card" content="summary_large_image" />
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="/icon-192.png" />
   <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body>
@@ -39,8 +41,10 @@
       <button id="bHelp" aria-label="help">？</button>
     </div>
     <div id="msg" role="status" aria-live="polite"></div>
-    <div id="prompt" class="hidden"></div>
+    <div id="prompt" class="hidden" role="status" aria-live="polite"></div>
     <div id="trainbox"><span id="trainicon">🚃</span><span id="traintext"></span></div>
+    <div id="quick"><button id="bGoPf" class="hidden"></button><button id="bCall" class="hidden"></button></div>
+    <div id="navbar" class="hidden"><span id="navArrow" aria-hidden="true">▲</span><span id="navText"></span><button id="navAuto"></button><button id="navStop">✕</button></div>
     <div id="mapwrap"><canvas id="map" width="176" height="176"></canvas><span id="mapN">N</span></div>
     <div id="fps" class="hidden"></div>
     <div id="help" data-i18n="helpShort">WASD 移動 ・ Shift 走る ・ Space ジャンプ ・ E 乗る ・ ？ ガイド</div>

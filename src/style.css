@@ -92,3 +92,18 @@ body.touch #help { display: none; }
   body.touch #fps { top: calc(166px + env(safe-area-inset-top)); }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+#quick { position: absolute; left: 14px; top: calc(96px + env(safe-area-inset-top)); display: flex; gap: 6px; flex-wrap: wrap; pointer-events: auto; }
+#quick button, #navbar button { border: 0; border-radius: 999px; padding: 6px 12px; font-size: 13px; background: var(--paper); box-shadow: 0 3px 12px rgba(60, 35, 10, .25); }
+#quick button:hover, #navbar button:hover { background: #fff; }
+#quick button:focus-visible, #navbar button:focus-visible, .spotrow button:focus-visible { outline: 3px solid #2f6b4f; outline-offset: 2px; }
+#navbar { position: absolute; left: 50%; top: calc(64px + env(safe-area-inset-top)); transform: translateX(-50%); display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 14px; border-radius: 999px; background: rgba(30, 60, 90, .88); color: #fff; font-size: 14px; box-shadow: 0 4px 16px rgba(0, 0, 0, .3); pointer-events: auto; max-width: 92vw; }
+#navbar.hidden { display: none; }
+#navArrow { display: inline-block; font-size: 20px; color: #ffcc55; transition: transform .15s; }
+#navbar button { color: var(--ink); }
+.spotrow { display: flex; gap: 6px; }
+.spotrow button:first-child { flex: 1; }
+.spotrow button[data-guide] { padding: 12px 10px; }
+body.touch #quick { top: calc(136px + env(safe-area-inset-top)); }
+@media (max-width: 700px) { #quick { top: calc(134px + env(safe-area-inset-top)); max-width: calc(100vw - 150px); } #navbar { top: auto; bottom: calc(160px + env(safe-area-inset-bottom)); font-size: 13px; } }
+@media (prefers-contrast: more) { #where, #trainbox, #quick button, #navbar, #msg { outline: 2px solid #000; } }

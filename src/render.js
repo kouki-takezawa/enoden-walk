@@ -3,6 +3,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { makeAtmosPass } from './atmos.js';
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
@@ -40,6 +41,7 @@ export class Renderer {
       this.composer = null;
     }
     this.bloom = null;
+    this.atmos = null;
     const p = this.preset;
     if (!p.bloom && !p.msaa) return;
     const size = this.gl.getDrawingBufferSize(new THREE.Vector2());
@@ -53,6 +55,8 @@ export class Renderer {
       this.bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth * 0.5, innerHeight * 0.5), 0.28, 0.6, 1.25);
       this.composer.addPass(this.bloom);
     }
+    this.atmos = makeAtmosPass(); // shafts / flare / grade / vignette (medium and high)
+    this.composer.addPass(this.atmos);
     this.composer.addPass(new OutputPass());
   }
 
