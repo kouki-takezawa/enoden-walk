@@ -10,7 +10,10 @@ const dirFrom = (azDeg, elDeg) => {
 };
 
 // ---------------------------------------------------------------------------------------------------- sky dome
-export function makeSky(clouds = true) {
+// `physical` (Phase C5.4, ultra preset only): a Rayleigh-ish airmass/horizon-warmth tint plus a Henyey-Greenstein
+// forward-scattering lobe around the sun, layered *on top of* the existing hand-tuned zen/mid/hor gradient rather
+// than replacing it — the per-time-of-day colours in TOD below are art-directed and stay the base look everywhere.
+export function makeSky(clouds = true, physical = false) {
   const mat = new THREE.ShaderMaterial({
     side: THREE.BackSide,
     depthWrite: false,
@@ -26,7 +29,7 @@ export function makeSky(clouds = true) {
       uCloud: { value: 0.5 },
       uSunGlow: { value: 1 },
     },
-    defines: { CLOUDS: clouds ? 1 : 0 },
+    defines: { CLOUDS: clouds ? 1 : 0, PHYSICAL: physical ? 1 : 0 },
     vertexShader: /* glsl */ `
       varying vec3 vDir;
       void main() {
@@ -57,6 +60,21 @@ export function makeSky(clouds = true) {
         float s = max(dot(d, normalize(sunDir)), 0.0);
         vec3 sunTint = mix(vec3(1.0, 0.62, 0.30), vec3(1.0, 0.95, 0.85), smoothstep(0.1, 0.6, sunDir.y));
         col += sunTint * pow(s, 6.0) * 0.50 * uSunGlow + vec3(1.0, 0.92, 0.75) * pow(s, 260.0) * 2.5 * uSunGlow;
+        #if PHYSICAL
+        {
+          // Rayleigh-ish: the zenith reads a touch more blue the higher you look, and the whole sky warms toward
+          // the horizon as the sun gets low (more atmosphere / "airmass" along a grazing view ray).
+          float airmass = 1.0 - smoothstep(0.0, 0.55, h);
+          float sunLow = 1.0 - smoothstep(-0.05, 0.45, sunDir.y);
+          col = mix(col, col * vec3(0.92, 0.98, 1.06), 0.5 * smoothstep(0.20, 0.95, h));
+          col += vec3(1.0, 0.52, 0.22) * airmass * sunLow * 0.11;
+          // Henyey-Greenstein forward-scattering lobe around the sun (replaces the ad hoc pow() terms above with a
+          // physically motivated falloff shape; still tinted / gated by the same sunTint and uSunGlow as above).
+          float g = 0.78;
+          float hg = (1.0 - g * g) / pow(max(1.0 + g * g - 2.0 * g * s, 1e-4), 1.5);
+          col += sunTint * hg * 0.018 * uSunGlow;
+        }
+        #endif
         #if CLOUDS
         if (h > 0.0) {
           vec2 uv = d.xz / (h + 0.14) * 0.85 + vec2(uTime * 0.006, uTime * 0.002);

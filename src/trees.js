@@ -134,13 +134,25 @@ const WIND = /* glsl */ `
   transformed.z += (sw2 * 0.03) * h2 * gu;
 `;
 
-function windify(mat, on) {
-  mat.customProgramCacheKey = () => `tree${on ? 1 : 0}`;
+// Phase C5.2 (ultra only): a higher-frequency "leaf flutter" layered on top of WIND above, weighted toward the
+// canopy (position.y already anchors the trunk base at y=0 for WIND; this adds a second, stiffer anchor so the
+// flutter itself fades out well before the trunk, instead of just being smaller there like WIND's h2 term).
+const FLUTTER = /* glsl */ `
+  float canopy = smoothstep(0.35, 0.75, position.y);
+  float fl = sin(uTime * 5.3 + instanceMatrix[3].x * 0.7 + position.x * 9.0) * sin(uTime * 3.1 + instanceMatrix[3].z * 0.5 + position.z * 7.0);
+  transformed.x += fl * 0.010 * canopy * gu;
+  transformed.z += fl * 0.008 * canopy * gu;
+`;
+
+function windify(mat, on, flutter) {
+  mat.customProgramCacheKey = () => `tree${on ? 1 : 0}${flutter ? 'f' : ''}`;
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uTime = U.uTime;
     shader.uniforms.uGust = U.uGust;
     if (!on) return;
-    shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime;\nuniform float uGust;').replace('#include <begin_vertex>', `#include <begin_vertex>\n${WIND}`);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nuniform float uTime;\nuniform float uGust;')
+      .replace('#include <begin_vertex>', `#include <begin_vertex>\n${WIND}${flutter ? FLUTTER : ''}`);
   };
 }
 
@@ -150,9 +162,9 @@ export function makeTrees(data, opts) {
   const group = new THREE.Group();
   const geos = treeGeometries(opts.leafCards);
   const coreMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, flatShading: false });
-  windify(coreMat, opts.wind);
+  windify(coreMat, opts.wind, opts.flutter);
   const leafMat = new THREE.MeshStandardMaterial({ vertexColors: true, map: leafTexture(), alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.85 });
-  windify(leafMat, opts.wind);
+  windify(leafMat, opts.wind, opts.flutter);
   // bucket: kind -> cell key -> trees
   const buckets = [new Map(), new Map(), new Map(), new Map()];
   data.trees.forEach((tr, i) => {
