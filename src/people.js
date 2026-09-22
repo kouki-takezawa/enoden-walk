@@ -1,9 +1,13 @@
-// Phase N2/N3: a low-poly person build block shared with the train's seated passengers (train.js), plus a small
-// crowd of wandering pedestrians driven by the same A* pathfinding the minimap's "walk here" guide already uses.
+// Phase N2 (train.js's seated passengers, kept as simple low-poly primitives — they're barely visible through the
+// train windows, not worth the SkinnedMesh cost) / N3->B3 (wandering pedestrians, now the real Blender-modelled,
+// rigged character from blender/character_male20s.py — see main.js's pedestrian_N.glb loading and PLAYER_SPEED
+// below) driven by the same A* pathfinding the minimap's "walk here" guide already uses.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { findPath } from './nav.js';
 import { U } from './fx.js';
+import { SPEED as PLAYER_SPEED } from './player.js';
 
 function tint(geo, hex) {
   const g = geo.toNonIndexed();
@@ -64,45 +68,51 @@ function legMaterial(color, signOffset) {
 }
 
 const WAYPOINT_NAMES = ['1号踏切', '鎌倉高校前駅', '海沿いの歩道', '国道134号'];
+const ANIM_LOD_DIST = 45; // beyond this, freeze the walk pose (still moves/faces correctly, just stops animating) — cheap and unnoticeable that far out
 
 /** A small wandering crowd: each pedestrian A*-paths (nav.js: findPath, the same routine the minimap guide uses)
- *  between a few fixed points of interest and loops. Rendered as 3 InstancedMeshes (torso + 2 legs) — cheap even
- *  for a couple dozen extras, since there is no skeleton, just a per-instance vertex-shader leg swing. */
+ *  between a few fixed points of interest and loops. Each instance is a SkeletonUtils clone of one of a handful of
+ *  pedestrian_N.glb variants (blender/character_male20s.py --seed/--outfit — same rigged, real-texture-baked
+ *  pipeline as the player, see B1/B3), playing its own baked Walk cycle at a speed-matched timeScale so footfalls
+ *  don't slide. Kept few (main.js: PEOPLE_COUNT) and shadow-less: a handful of real SkinnedMeshes already costs
+ *  much more than the old box-primitive crowd did. */
 export class Pedestrians {
-  constructor(ground, meta, count) {
+  constructor(templates, ground, meta, count) {
     this.ground = ground;
     this.group = new THREE.Group();
     this.waypoints = meta.poi.filter((p) => WAYPOINT_NAMES.includes(p.name)).map((p) => [p.x, -p.y]);
-    if (this.waypoints.length < 2) {
-      this.people = [];
-      return;
-    }
-
-    const torsoGeo = makeTorsoGeometry();
-    const torsoMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, vertexColors: true });
-    this.torso = new THREE.InstancedMesh(torsoGeo, torsoMat, count);
-    this.torso.frustumCulled = false;
-    this.torso.castShadow = true;
-    this.torso.receiveShadow = true;
-    const lg = legGeometry();
-    this.legL = new THREE.InstancedMesh(lg, legMaterial(0x2a2d33, 0), count);
-    this.legR = new THREE.InstancedMesh(lg, legMaterial(0x2a2d33, Math.PI), count);
-    for (const m of [this.legL, this.legR]) {
-      m.frustumCulled = false;
-      m.castShadow = true;
-    }
-    this.group.add(this.torso, this.legL, this.legR);
+    this.people = [];
+    if (this.waypoints.length < 2 || !templates.length) return;
 
     const rnd = (seed) => Math.abs(Math.sin(seed * 12.9898) * 43758.5453) % 1;
-    this.people = [];
     for (let i = 0; i < count; i++) {
-      const p = { path: null, seg: 0, t: 0, pos: new THREE.Vector2(), yaw: 0, speed: WALK_SPEED * (0.8 + rnd(i) * 0.4), hue: rnd(i + 50) };
+      const tpl = templates[i % templates.length];
+      const model = cloneSkinned(tpl.scene);
+      model.traverse((o) => {
+        if (o.name.startsWith('Rig')) o.position.set(0, 0, 0); // same origin-offset quirk player.js works around
+        if (o.isMesh || o.isSkinnedMesh) {
+          o.castShadow = false; // background extras — not worth the shadow-pass triangles at this count x real-mesh cost
+          o.receiveShadow = false;
+          o.frustumCulled = false;
+        }
+      });
+      this.group.add(model);
+      const mixer = new THREE.AnimationMixer(model);
+      const clip = tpl.animations.find((c) => c.name === 'Male_Walk');
+      const action = clip ? mixer.clipAction(clip) : null;
+      const speed = WALK_SPEED * (0.8 + rnd(i) * 0.4);
+      if (action) {
+        action.play();
+        action.timeScale = speed / PLAYER_SPEED.walk; // the clip was authored around the player's own walk speed
+        action.time = rnd(i + 80) * (clip.duration || 1); // desync the crowd's gait phase
+      }
+      const p = { model, mixer, action, path: null, seg: 0, t: 0, pos: new THREE.Vector2(), yaw: 0, speed };
       const from = this.waypoints[i % this.waypoints.length];
       p.pos.set(from[0], from[1]);
       this._retarget(p, i);
       this.people.push(p);
     }
-    this._apply(); // first frame's matrices before the initial render
+    this._apply(0, null); // first frame's transforms before the initial render
   }
 
   _retarget(p, seed) {
@@ -117,7 +127,7 @@ export class Pedestrians {
     p.t = 0;
   }
 
-  update(dt) {
+  update(dt, refPos) {
     if (!this.people.length) return;
     for (let i = 0; i < this.people.length; i++) {
       const p = this.people[i];
@@ -147,32 +157,17 @@ export class Pedestrians {
       p.pos.set(cur[0] + (nxt[0] - cur[0]) * p.t, cur[1] + (nxt[1] - cur[1]) * p.t);
       p.yaw = Math.atan2(nxt[0] - cur[0], nxt[1] - cur[1]);
     }
-    this._apply();
+    this._apply(dt, refPos);
   }
 
-  _apply() {
-    const m4 = new THREE.Matrix4();
-    const q = new THREE.Quaternion();
-    const up = new THREE.Vector3(0, 1, 0);
-    const col = new THREE.Color();
-    const ONE = new THREE.Vector3(1, 1, 1);
-    this.people.forEach((p, i) => {
+  _apply(dt, refPos) {
+    for (const p of this.people) {
       const gy = this.ground.height(p.pos.x, -p.pos.y);
       const y = gy === gy ? gy : 0;
-      q.setFromAxisAngle(up, p.yaw);
-      m4.compose(new THREE.Vector3(p.pos.x, y, -p.pos.y), q, ONE);
-      this.torso.setMatrixAt(i, m4);
-      col.setHSL(p.hue, 0.35, 0.35 + 0.25 * p.hue);
-      this.torso.setColorAt(i, col);
-      // a small left/right hip offset along the body's own right vector, so the two legs don't sit on top of each other
-      const rightX = Math.cos(p.yaw) * 0.075;
-      const rightZ = -Math.sin(p.yaw) * 0.075;
-      this.legL.setMatrixAt(i, new THREE.Matrix4().compose(new THREE.Vector3(p.pos.x - rightX, y + 0.42, -p.pos.y - rightZ), q, ONE));
-      this.legR.setMatrixAt(i, new THREE.Matrix4().compose(new THREE.Vector3(p.pos.x + rightX, y + 0.42, -p.pos.y + rightZ), q, ONE));
-    });
-    this.torso.instanceMatrix.needsUpdate = true;
-    if (this.torso.instanceColor) this.torso.instanceColor.needsUpdate = true;
-    this.legL.instanceMatrix.needsUpdate = true;
-    this.legR.instanceMatrix.needsUpdate = true;
+      p.model.position.set(p.pos.x, y, -p.pos.y);
+      p.model.rotation.y = p.yaw;
+      const near = !refPos || Math.hypot(p.pos.x - refPos.x, -p.pos.y - refPos.z) < ANIM_LOD_DIST;
+      if (near && dt > 0) p.mixer.update(dt);
+    }
   }
 }
