@@ -3,14 +3,21 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
-import { makeAtmosPass } from './atmos.js';
+import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
+import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
+import { BokehPass } from 'three/examples/jsm/postprocessing/BokehPass.js';
+import { AfterimagePass } from 'three/examples/jsm/postprocessing/AfterimagePass.js';
+import { makeAtmosPass, makeGradePass } from './atmos.js';
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
-/** WebGL renderer + optional composer (MSAA render target, bloom, output pass) + a frame-time governor that adapts the pixel ratio. */
+/** WebGL renderer + optional composer (MSAA render target, bloom, SSAO, DOF, atmosphere, SMAA, chromatic-aberration/grain, motion blur)
+ *  + a frame-time governor that adapts the pixel ratio. */
 export class Renderer {
-  constructor(canvas, preset, { govern = true } = {}) {
+  constructor(canvas, preset, { govern = true, scene, camera } = {}) {
     this.canvas = canvas;
+    this.scene = scene;
+    this.camera = camera;
     this.gl = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance', preserveDrawingBuffer: false });
     this.gl.outputColorSpace = THREE.SRGBColorSpace; // linear lighting -> sRGB display
     this.gl.toneMapping = THREE.ACESFilmicToneMapping; // filmic roll-off
@@ -23,6 +30,7 @@ export class Renderer {
     this.baseDpr = 1;
     this.dpr = 1;
     this.composer = null;
+    this.motionBlurOn = false;
     this.apply(preset);
   }
 
@@ -42,8 +50,10 @@ export class Renderer {
     }
     this.bloom = null;
     this.atmos = null;
+    this.ssao = null;
+    this.dof = null;
+    this.afterimage = null;
     const p = this.preset;
-    if (!p.bloom && !p.msaa) return;
     const size = this.gl.getDrawingBufferSize(new THREE.Vector2());
     const rt = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: p.msaa, colorSpace: THREE.LinearSRGBColorSpace });
     this.composer = new EffectComposer(this.gl, rt);
@@ -55,9 +65,48 @@ export class Renderer {
       this.bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth * 0.5, innerHeight * 0.5), 0.28, 0.6, 1.25);
       this.composer.addPass(this.bloom);
     }
-    this.atmos = makeAtmosPass(); // shafts / flare / grade / vignette (medium and high)
-    this.composer.addPass(this.atmos);
+    if (p.ssao && this.scene && this.camera) {
+      this.ssao = new GTAOPass(this.scene, this.camera, size.x, size.y, undefined, { radius: 2, distanceExponent: 1, thickness: 1 });
+      this.ssao.output = GTAOPass.OUTPUT.Default;
+      this.ssao.blendIntensity = 0.85;
+      this.gtaoBox = new THREE.Box3();
+      this.ssao.setSceneClipBox(this.gtaoBox);
+      this.composer.addPass(this.ssao);
+    }
+    if (p.atmos) {
+      this.atmos = makeAtmosPass(); // shafts / flare / grade / vignette (medium, high, ultra)
+      this.composer.addPass(this.atmos);
+    }
+    if (p.dof && this.scene && this.camera) {
+      this.dof = new BokehPass(this.scene, this.camera, { focus: 6, aperture: 0.012, maxblur: 0.006 });
+      this.composer.addPass(this.dof);
+    }
+    if (p.smaa) this.composer.addPass(new SMAAPass(size.x, size.y));
+    this.grade = makeGradePass(); // chromatic aberration + film grain: cheap enough to run on every preset
+    this.composer.addPass(this.grade);
+    if (p.motionBlur) {
+      this.afterimage = new AfterimagePass(0.72);
+      this.afterimage.enabled = this.motionBlurOn;
+      this.composer.addPass(this.afterimage);
+    }
     this.composer.addPass(new OutputPass());
+  }
+
+  /** ultra-only, and off by default even there: the settings toggle drives this independently of the preset. */
+  setMotionBlur(on) {
+    this.motionBlurOn = on;
+    if (this.afterimage) this.afterimage.enabled = on;
+  }
+
+  /** keeps the GTAO pass's clip box (needed for depth precision against a 150 km far plane) centred on the player. */
+  updateAoBox(center, half = 120) {
+    if (!this.gtaoBox) return;
+    this.gtaoBox.min.set(center.x - half, center.y - 40, center.z - half);
+    this.gtaoBox.max.set(center.x + half, center.y + 60, center.z + half);
+  }
+
+  setFocus(dist) {
+    if (this.dof) this.dof.uniforms.focus.value = dist;
   }
 
   resize() {

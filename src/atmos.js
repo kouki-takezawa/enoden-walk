@@ -99,3 +99,36 @@ export function makeAtmosPass() {
   pass.enabled = true;
   return pass;
 }
+
+/** Chromatic aberration (radial, stronger toward the edges) + a faint film grain dither: cheap enough (three texture
+ *  taps + one hash) that it runs on every quality preset, including `low`, unlike the heavier atmos pass above. */
+export function makeGradePass() {
+  const pass = new ShaderPass({
+    uniforms: {
+      tDiffuse: { value: null },
+      uAspect: { value: 1 },
+      uTime: { value: 0 },
+      uCA: { value: 0.0016 },
+      uGrain: { value: 0.018 },
+    },
+    vertexShader: /* glsl */ `
+      varying vec2 vUv;
+      void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: /* glsl */ `
+      uniform sampler2D tDiffuse;
+      uniform float uAspect, uTime, uCA, uGrain;
+      varying vec2 vUv;
+      float gh21(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+      void main() {
+        vec2 c = (vUv - 0.5) * vec2(uAspect, 1.0);
+        vec2 dir = c * dot(c, c) * uCA;
+        float r = texture2D(tDiffuse, vUv - dir).r;
+        float g = texture2D(tDiffuse, vUv).g;
+        float b = texture2D(tDiffuse, vUv + dir).b;
+        vec3 col = vec3(r, g, b);
+        col += (gh21(vUv * 1731.0 + uTime) - 0.5) * uGrain;
+        gl_FragColor = vec4(max(col, 0.0), 1.0);
+      }`,
+  });
+  return pass;
+}
