@@ -63,6 +63,16 @@ export class Ground {
     }
   }
 
+  /** the baked solid mask fills the whole platform deck (benches / posts / rail merged into 1 m cells), which walls the deck off; free the walking strip so the ramp at the west end leads onto it */
+  clearDeck(pf) {
+    for (let y = Math.ceil(pf.y0); y <= pf.y1 - 0.5; y++) {
+      for (let x = Math.ceil(pf.x0); x <= pf.x1; x++) {
+        const k = this.index(x, -y);
+        if (k >= 0 && this.h[k] >= pf.height - 0.25) this.solid[k] = 0;
+      }
+    }
+  }
+
   /** true when the straight segment crosses a building footprint (used to keep the camera outside walls) */
   segmentBlocked(x0, z0, x1, z1) {
     const n = Math.max(2, Math.ceil(Math.hypot(x1 - x0, z1 - z0) / 0.6));

@@ -35,6 +35,7 @@ export class Input {
       else if (e.code === 'KeyH' || e.code === 'F1' || e.key === '?') this.hooks.help();
       else if (e.code === 'KeyT') this.hooks.cycleTime();
       else if (e.code === 'KeyC') this.hooks.recenter?.();
+      else if (e.code === 'KeyF') this.hooks.autoWalk?.();
       else if (e.code === 'Escape') this.hooks.escape?.();
       else if (e.code === 'Tab') {
         e.preventDefault();
@@ -187,8 +188,8 @@ export class Input {
       this.lastLook = performance.now();
     }
     const b = (i) => !!(gp.buttons[i] && gp.buttons[i].pressed);
-    this.pad.run = b(7) || b(5) || b(10);
-    this.pad.sprint = b(2);
+    this.pad.run = b(7) || b(5);
+    this.pad.sprint = b(2) || b(10); // pressing the left stick = dash
     const edge = (name, i, fn) => {
       const on = b(i);
       if (on && !this.padPrev[name]) fn();
@@ -210,7 +211,8 @@ export class Input {
     return {
       x,
       y,
-      run: !!(k.ShiftLeft || k.ShiftRight) || this.touch.run || this.pad.run,
+      // a floating stick pushed to its very end also runs
+      run: !!(k.ShiftLeft || k.ShiftRight) || this.touch.run || this.pad.run || Math.hypot(this.touch.x, this.touch.y) > 0.94,
       sprint: !!k.KeyR || this.pad.sprint,
     };
   }

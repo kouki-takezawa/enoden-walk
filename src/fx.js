@@ -4,6 +4,12 @@ import * as THREE from 'three';
 export const U = {
   uNight: { value: 0 },
   uTime: { value: 0 },
+  uGust: { value: 0 }, // 0..1 wind gust (a train rushing past)
+  uWet: { value: 0 }, // 0..1 rain-soaked ground
+  uCloudSh: { value: 0 }, // 0..1 drifting cloud shadows on the ground
+  uGlit: { value: 0 }, // 0..1 sun glitter on the sea
+  uSunView: { value: new THREE.Vector3(0, 1, 0) }, // sun direction in view space (fog in-scattering)
+  uSunCol: { value: new THREE.Vector3() }, // warm in-scattering colour * strength
 };
 
 const NOISE = /* glsl */ `
@@ -16,11 +22,19 @@ float fxNoise(vec2 p) {
 }
 `;
 
+/** materials whose env reflection is raised while it rains (see main.js) */
+export const wetMats = new Set();
+
 function inject(shader, vertexVars, vertexMain, fragGlobals, patches) {
+  shader.uniforms.uTime = U.uTime;
+  shader.uniforms.uWet = U.uWet;
+  shader.uniforms.uCloudSh = U.uCloudSh;
+  shader.uniforms.uSunView = U.uSunView;
+  shader.uniforms.uSunCol = U.uSunCol;
   shader.vertexShader = shader.vertexShader
     .replace('#include <common>', `#include <common>\n${vertexVars}`)
     .replace('#include <begin_vertex>', `#include <begin_vertex>\n${vertexMain}`);
-  let f = shader.fragmentShader.replace('#include <common>', `#include <common>\n${NOISE}\n${fragGlobals}`);
+  let f = shader.fragmentShader.replace('#include <common>', `#include <common>\nuniform float uTime;\nuniform float uWet;\nuniform float uCloudSh;\n${NOISE}\n${fragGlobals}`);
   for (const [tag, code] of patches) f = f.replace(tag, `${tag}\n${code}`);
   shader.fragmentShader = f;
 }
@@ -101,6 +115,10 @@ export function patchTerrain(mat, detail) {
           }`
             : '',
         ],
+        [
+          '#include <color_fragment>',
+          'diffuseColor.rgb *= 1.0 - uCloudSh * 0.30 * smoothstep(0.50, 0.72, fxNoise(vWPos.xz * 0.013 + vec2(uTime * 0.035, uTime * 0.014)));',
+        ],
       ],
     );
   };
@@ -110,19 +128,62 @@ export function patchTerrain(mat, detail) {
 /** road surface: blotchy wear + fine aggregate */
 export function patchAsphalt(mat, detail) {
   mat.customProgramCacheKey = () => `asphalt${detail}`;
+  wetMats.add(mat);
   mat.onBeforeCompile = (shader) => {
-    inject(shader, 'varying vec3 vWPos;', 'vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;', 'varying vec3 vWPos;', [
+    inject(shader, 'varying vec3 vWPos;', 'vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;', 'varying vec3 vWPos; float gWet = 0.0;', [
       [
         '#include <color_fragment>',
-        detail > 0
-          ? `{
+        `${
+          detail > 0
+            ? `{
           float n1 = fxNoise(vWPos.xz * 0.55);
           float n2 = fxNoise(vWPos.xz * 7.5);
           float crack = smoothstep(0.02, 0.0, abs(fxNoise(vWPos.xz * 1.15 + 5.0) - 0.5) - 0.012);
           diffuseColor.rgb *= 0.80 + 0.32 * n1 + 0.14 * n2 - ${detail > 1 ? '0.16' : '0.08'} * crack;
         }`
-          : '',
+            : ''
+        }
+        diffuseColor.rgb *= 1.0 - uCloudSh * 0.30 * smoothstep(0.50, 0.72, fxNoise(vWPos.xz * 0.013 + vec2(uTime * 0.035, uTime * 0.014)));
+        {
+          // rain: the road darkens and puddles form in the low, noisy patches
+          float pud = smoothstep(0.50, 0.70, fxNoise(vWPos.xz * 0.35 + 9.0));
+          gWet = uWet * (0.55 + 0.45 * pud);
+          diffuseColor.rgb *= 1.0 - 0.34 * gWet;
+        }`,
       ],
+      ['#include <roughnessmap_fragment>', 'roughnessFactor = mix(roughnessFactor, 0.045, gWet);'],
+    ]);
+  };
+  mat.needsUpdate = true;
+}
+
+/** platform deck / wooden posts / tactile strip: grime, worn yellow paint, dirty column bases, wet patches (all confined to the deck's world box) */
+export function patchDeck(mat, kind) {
+  mat.customProgramCacheKey = () => `deck-${kind}`;
+  if (kind === 'top') wetMats.add(mat);
+  const body = {
+    top: `float n = fxNoise(vec2(vWPos.x * 0.7, vWPos.z * 4.0));
+      diffuseColor.rgb *= 0.84 + 0.26 * n + 0.10 * (fxNoise(vWPos.xz * 6.0) - 0.5);
+      float pud = smoothstep(0.50, 0.68, fxNoise(vWPos.xz * 0.5 + 2.0));
+      gWet = uWet * (0.6 + 0.4 * pud);
+      diffuseColor.rgb *= 1.0 - 0.28 * gWet;`,
+    yellow: `float wear = smoothstep(0.55, 0.82, fxNoise(vWPos.xz * vec2(1.6, 9.0) + 3.0));
+      diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.72, 0.66, 0.5), wear * 0.7);
+      float chip = smoothstep(0.78, 0.9, fxNoise(vWPos.xz * vec2(4.0, 20.0)));
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.36, 0.34, 0.32), chip * 0.5);`,
+    wood: `float low = 1.0 - smoothstep(0.0, 0.6, vWPos.y - 1.1);
+      float n = fxNoise(vWPos.xz * 3.0 + vWPos.y * 2.0);
+      diffuseColor.rgb *= 1.0 - low * (0.18 + 0.22 * n);`,
+  }[kind];
+  mat.onBeforeCompile = (shader) => {
+    inject(shader, 'varying vec3 vWPos;', 'vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;', 'varying vec3 vWPos; float gWet = 0.0;', [
+      [
+        '#include <color_fragment>',
+        `if (vWPos.x > -56.0 && vWPos.x < -9.0 && vWPos.z < -1.3 && vWPos.z > -4.6 && vWPos.y > 0.9) {
+      ${body}
+    }`,
+      ],
+      ['#include <roughnessmap_fragment>', 'roughnessFactor = mix(roughnessFactor, 0.05, gWet);'],
     ]);
   };
   mat.needsUpdate = true;

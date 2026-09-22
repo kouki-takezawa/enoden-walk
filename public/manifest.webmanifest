@@ -1,0 +1,29 @@
+{
+  "name": "江ノ電 鎌倉高校前 散歩",
+  "short_name": "江ノ電散歩",
+  "description": "江ノ電・鎌倉高校前駅の1号踏切と相模湾の見える丘の街を歩ける3Dウェブアプリ",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f0b98a",
+  "theme_color": "#f0b98a",
+  "lang": "ja",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

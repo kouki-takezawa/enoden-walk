@@ -53,4 +53,14 @@ describe('Ground', () => {
     expect(t).toBeGreaterThan(0.5);
     expect(t).toBeLessThan(1);
   });
+
+  it('clearDeck frees solid cells on the platform deck only', () => {
+    const g = make((i, j) => (j >= 4 ? 1.1 : -0.2)); // y = j - 4: deck for y >= 0
+    g.solid.fill(1);
+    g.clearDeck({ x0: -3, x1: 2, y0: 0.5, y1: 3.95, height: 1.1 });
+    expect(g.isSolid(0, -1)).toBe(false);
+    expect(g.isSolid(0, -3)).toBe(false);
+    expect(g.isSolid(0, 0)).toBe(true); // track side stays closed
+    expect(g.isSolid(0, -4)).toBe(true); // back fence stays closed
+  });
 });

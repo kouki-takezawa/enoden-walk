@@ -129,16 +129,18 @@ const WIND = /* glsl */ `
   float sw = sin(uTime * 1.35 + instanceMatrix[3].x * 0.11 + instanceMatrix[3].z * 0.13);
   float sw2 = sin(uTime * 2.7 + instanceMatrix[3].z * 0.21);
   float h2 = position.y * position.y;
-  transformed.x += (sw * 0.045 + sw2 * 0.012) * h2;
-  transformed.z += (sw2 * 0.03) * h2;
+  float gu = 1.0 + uGust * 2.2;
+  transformed.x += (sw * 0.045 + sw2 * 0.012) * h2 * gu;
+  transformed.z += (sw2 * 0.03) * h2 * gu;
 `;
 
 function windify(mat, on) {
   mat.customProgramCacheKey = () => `tree${on ? 1 : 0}`;
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uTime = U.uTime;
+    shader.uniforms.uGust = U.uGust;
     if (!on) return;
-    shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime;').replace('#include <begin_vertex>', `#include <begin_vertex>\n${WIND}`);
+    shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime;\nuniform float uGust;').replace('#include <begin_vertex>', `#include <begin_vertex>\n${WIND}`);
   };
 }
 

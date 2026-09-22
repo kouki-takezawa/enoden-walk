@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { makeAlarmGlow, makeBeam, makeSparks } from './lights.js';
 
 const LEN = 26.3; // two-car set, cab end at +x of the model (x = 0.6 at the origin)
 const CAB_X = 0.6;
@@ -8,7 +9,7 @@ const ACCEL = 0.9;
 const DECEL = 1.1;
 const START = 160;
 const END = 205; // riders turn around here
-const DWELL = 14;
+const DWELL = 20; // long enough to walk up the platform and board
 
 /** Runs the Enoden set along the track with a stop at the platform, drives the level crossing (alarm lamps + barrier arms) and can carry the player. */
 export class Train {
@@ -70,6 +71,13 @@ export class Train {
     this.inner.add(this.head, this.head.target);
     this.passengers = this._passengers();
     this.inner.add(this.passengers);
+    this.beam = makeBeam();
+    this.beam.position.set(CAB_X + 0.3, 1.5, 0);
+    this.inner.add(this.beam);
+    this.sparks = makeSparks(trainGltf.scene);
+    if (this.sparks) this.inner.add(this.sparks.points);
+    this.alarmGlow = makeAlarmGlow(world);
+    world.add(this.alarmGlow.root);
     this.place();
     this.setArms(0);
     this.setLamps(false, 0);
@@ -132,6 +140,7 @@ export class Train {
 
   hits(p) {
     if (this.state === 'wait' || this.rider) return false;
+    if (p.z < -1.4 && p.y > 0.3) return false; // standing on the platform deck (the solid cells keep walkers out of z > -1.5; its edge is at -1.35)
     const [a, b] = this.span();
     return p.x > a - 0.4 && p.x < b + 0.4 && Math.abs(p.z) < 1.6 && p.y < 4.2;
   }
@@ -192,7 +201,7 @@ export class Train {
     return this.state !== 'dwell' && a < CRUISE * 7 && b > -9 && this.stopping;
   }
 
-  update(dt, night = 0) {
+  update(dt, night = 0, glow = night) {
     this.time += dt;
     if (this.state === 'wait') {
       this.timer -= dt;
@@ -249,6 +258,7 @@ export class Train {
       this.flip = !this.flip;
     }
     this.setLamps(this.alarm, this.flip);
+    this.alarmGlow.update(this.alarm, this.flip, night);
 
     // running sway + night lights
     const v = this.speed / CRUISE;
@@ -256,6 +266,8 @@ export class Train {
     this.inner.rotation.x = Math.sin(this.time * 4.3) * 0.0022 * v;
     this.inner.position.y = Math.abs(Math.sin(this.front * 0.52)) * 0.006 * v;
     this.head.intensity = night * 260 * (this.state === 'wait' ? 0 : 1);
+    this.beam.material.uniforms.uI.value = Math.min(1, glow * 3) * (this.state === 'wait' ? 0 : 1);
+    this.sparks?.update(dt, night, this.speed);
     if (this.glass) {
       this.glass.emissive.setRGB(1.0, 0.82, 0.55);
       this.glass.emissiveIntensity = night * 0.55;

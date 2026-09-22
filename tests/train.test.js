@@ -81,6 +81,14 @@ describe('Train', () => {
     expect(tr.hits(on)).toBe(false);
   });
 
+  it('does not hit somebody standing on the platform deck, even at its edge', () => {
+    const tr = make();
+    run(tr, (x) => x.state === 'dwell');
+    const x = (tr.span()[0] + tr.span()[1]) / 2;
+    expect(tr.hits(new THREE.Vector3(x, 0.45, -1.5))).toBe(false); // deck edge (ground height is smoothed there)
+    expect(tr.hits(new THREE.Vector3(x, -0.2, -1.0))).toBe(true); // still on the rails
+  });
+
   it('turns around at the end of the line when carrying a passenger and comes back to stop', () => {
     const tr = make();
     run(tr, (x) => x.state === 'dwell');

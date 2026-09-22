@@ -15,6 +15,16 @@ describe('config', () => {
     expect(mod.autoPreset()).toMatch(/low|medium|high/);
   });
 
+  it('has every announcement / telop string in both languages', () => {
+    const tJa = makeT(() => 'ja');
+    const tEn = makeT(() => 'en');
+    for (const k of ['announce', 'autoTime', 'rain', 'platform_hint', 'st_koshigoe', 'st_shichiri', 'st_here', 'depart_next', 'soon_here', 'say_arriving_east', 'say_arriving_west', 'say_depart', 'say_soon', 'go_platform', 'call_train', 'train_called', 'nav_to', 'nav_auto', 'nav_manual', 'nav_stop', 'nav_arrived', 'nav_none', 'nav_near', 'nav_hold', 'nav_lost', 'guide_btn', 'map_hint', 'autowalk_on', 'autowalk_off']) {
+      expect(tJa(k)).not.toBe(k);
+      expect(tEn(k)).not.toBe(k);
+      expect(tEn(k)).not.toBe(tJa(k));
+    }
+  });
+
   it('interpolates variables and falls back to Japanese for a missing English string', () => {
     const t = makeT(() => 'en');
     expect(t('where_near', { name: 'X' })).toBe('Near X');

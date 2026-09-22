@@ -44,6 +44,13 @@ export class UI {
     $('help').textContent = t('helpShort');
     for (const [id, key] of [['bTime', 'time'], ['bSpots', 'spots'], ['bPhoto', 'photo'], ['bSet', 'settings'], ['bHelp', 'help']]) $(id).setAttribute('aria-label', t(key));
     $('mapN').textContent = t('north');
+    $('bGoPf').textContent = t('go_platform');
+    $('bCall').textContent = t('call_train');
+    $('navStop').setAttribute('aria-label', t('nav_stop'));
+    $('navStop').title = t('nav_stop');
+    $('mapwrap').title = t('map_hint');
+    $('mapwrap').setAttribute('aria-label', t('map_hint'));
+    this.lastNav = '';
     this.lastWhere = '';
     this.lastTrain = '';
     if (this.modalOpen) this.openModal(this.modalOpen);
@@ -57,6 +64,8 @@ export class UI {
       row('<kbd>Shift</kbd>', t('runKey')),
       row('<kbd>R</kbd>', t('sprintKey')),
       row('<kbd>Space</kbd>', t('jumpKey')),
+      row('<kbd>F</kbd>', t('autowalkKey')),
+      row(t('mapKey'), t('mapKeyDesc')),
       row(this.s.lang === 'ja' ? 'ドラッグ / ホイール' : 'Drag / wheel', t('viewKey')),
       row('<kbd>C</kbd>', t('recenterKey')),
       row('<kbd>E</kbd>', t('boardKey')),
@@ -85,7 +94,16 @@ export class UI {
       e.preventDefault();
       h.board();
     });
-    $('mapwrap').onclick = () => this.openModal('spots');
+    $('mapwrap').onclick = (e) => {
+      const r = $('mapwrap').getBoundingClientRect();
+      const u = ((e.clientX - r.left) / r.width) * 176;
+      const v = ((e.clientY - r.top) / r.height) * 176;
+      if ((u - 88) ** 2 + (v - 88) ** 2 < 86 * 86) h.mapTap(u, v);
+    };
+    $('bGoPf').onclick = () => h.goPlatform();
+    $('bCall').onclick = () => h.callTrain();
+    $('navAuto').onclick = () => h.navAuto();
+    $('navStop').onclick = () => h.navStop();
     addEventListener('keydown', (e) => {
       if (e.code === 'Escape' && this.modalOpen) this.closeModal();
     });
@@ -116,6 +134,33 @@ export class UI {
       $('where').textContent = txt;
       this.lastWhere = txt;
     }
+  }
+
+  setQuick(showPlatform, showCall) {
+    $('bGoPf').classList.toggle('hidden', !showPlatform);
+    $('bCall').classList.toggle('hidden', !showCall);
+  }
+
+  /** info: null hides the bar; otherwise {name, m, angle (rad, clockwise from screen-up), auto} */
+  setNav(info) {
+    const bar = $('navbar');
+    if (!info) {
+      bar.classList.add('hidden');
+      this.navShown = false;
+      return;
+    }
+    if (!this.navShown) {
+      bar.classList.remove('hidden');
+      this.navShown = true;
+    }
+    $('navArrow').style.transform = `rotate(${info.angle}rad)`;
+    const txt = this.t('nav_to', { name: info.name, m: Math.max(0, Math.round(info.m)) });
+    if (txt !== this.lastNav) {
+      $('navText').textContent = txt;
+      this.lastNav = txt;
+    }
+    const a = this.t(info.auto ? 'nav_manual' : 'nav_auto');
+    if ($('navAuto').textContent !== a) $('navAuto').textContent = a;
   }
 
   setTimeIcon(name) {
@@ -207,7 +252,7 @@ export class UI {
     this.mapBase = cv;
   }
 
-  drawMinimap(player, yaw, train) {
+  drawMinimap(player, yaw, train, route) {
     if (!this.mapBase) return;
     const cv = $('map');
     const ctx = cv.getContext('2d');
@@ -231,6 +276,44 @@ export class UI {
       ctx.fillStyle = '#e6362b';
       const [a, b] = train.span;
       ctx.fillRect(px(a, 0), py(a, 0) - 2.5, Math.max(4, px(b, 0) - px(a, 0)), 5);
+    }
+    // guidance route + destination
+    if (route && route.points.length) {
+      ctx.strokeStyle = 'rgba(255, 190, 40, 0.95)';
+      ctx.lineWidth = 3;
+      ctx.setLineDash([6, 4]);
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(px(player.x, player.z), py(player.x, player.z));
+      for (const p of route.points.slice(route.i)) ctx.lineTo(px(p[0], p[1]), py(p[0], p[1]));
+      ctx.stroke();
+      ctx.setLineDash([]);
+      const tx = px(route.target[0], route.target[1]);
+      const ty = py(route.target[0], route.target[1]);
+      const pulse = 5 + 2.5 * Math.sin(performance.now() / 260);
+      ctx.strokeStyle = '#ff9a1f';
+      ctx.fillStyle = 'rgba(255, 154, 31, 0.35)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(Math.max(4, Math.min(172, tx)), Math.max(4, Math.min(172, ty)), pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+    // platform deck + its entrance ramp
+    const pf = this.meta.platform;
+    if (pf) {
+      const x0 = px(pf.x0, 0);
+      const x1 = px(pf.x1, 0);
+      const y0 = py(0, -pf.y1);
+      const y1 = py(0, -pf.y0);
+      if (x1 > 0 && x0 < 176) {
+        ctx.fillStyle = 'rgba(232, 236, 240, 0.85)';
+        ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+        ctx.fillStyle = '#ff8a2b';
+        ctx.beginPath();
+        ctx.arc(px(pf.x0 - 2.5, 0), py(0, -(pf.y0 + pf.y1) / 2), 2.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
     // spots
     ctx.fillStyle = '#ffffff';
@@ -269,7 +352,7 @@ export class UI {
     let body = '';
     if (kind === 'help') body = `<h2>${t('help')}</h2><div class="keys">${this.helpHTML()}</div><p class="credit">${t('credit')}</p>`;
     else if (kind === 'spots') {
-      body = `<h2>${t('spots')}</h2><div class="spots">${this.meta.poi.map((p, i) => `<button data-spot="${i}">${esc(this.s.lang === 'en' ? p.en : p.name)}</button>`).join('')}</div>
+      body = `<h2>${t('spots')}</h2><div class="spots">${this.meta.poi.map((p, i) => `<div class="spotrow"><button data-spot="${i}">${esc(this.s.lang === 'en' ? p.en : p.name)}</button><button data-guide="${i}" title="${esc(t('guide_btn'))}" aria-label="${esc(t('guide_btn'))}: ${esc(this.s.lang === 'en' ? p.en : p.name)}">🧭</button></div>`).join('')}</div>
         <div class="row"><button id="mShare">${t('share')}</button></div>`;
     } else if (kind === 'settings') {
       const sel = (id, opts, val) => `<select id="${id}">${opts.map(([v, l]) => `<option value="${v}"${v === val ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
@@ -283,10 +366,14 @@ export class UI {
         <label><input id="sInv" type="checkbox" ${this.s.invertY ? 'checked' : ''}> ${t('invertY')}</label>
         <label><input id="sAuto" type="checkbox" ${this.s.autoCam ? 'checked' : ''}> ${t('autoCam')}</label>
         <label><input id="sReduce" type="checkbox" ${this.s.reduceMotion ? 'checked' : ''}> ${t('reduce')}</label>
+        <label><input id="sAnn" type="checkbox" ${this.s.announce ? 'checked' : ''}> ${t('announce')}</label>
+        <label><input id="sAutoT" type="checkbox" ${this.s.autoTime ? 'checked' : ''}> ${t('autoTime')}</label>
+        <label><input id="sRain" type="checkbox" ${this.s.rain ? 'checked' : ''}> ${t('rain')}</label>
         <label><input id="sFps" type="checkbox" ${this.s.fps ? 'checked' : ''}> ${t('fps')}</label>
         <label>${t('lang')} ${sel('sLang', [['ja', '日本語'], ['en', 'English']], this.s.lang)}</label>`;
     }
-    m.innerHTML = `<div class="modalbox" role="dialog" aria-modal="true">${body}<button id="mClose" class="close">${t('close')}</button></div>`;
+    if (!this.lastFocus) this.lastFocus = document.activeElement;
+    m.innerHTML = `<div class="modalbox" role="dialog" aria-modal="true" aria-label="${esc(t(kind === 'spots' ? 'spots' : kind))}">${body}<button id="mClose" class="close">${t('close')}</button></div>`;
     m.classList.remove('hidden');
     $('mClose').onclick = () => this.closeModal();
     m.onclick = (e) => {
@@ -295,6 +382,10 @@ export class UI {
     m.querySelectorAll('[data-spot]').forEach((b) => (b.onclick = () => {
       this.closeModal();
       this.hooks.goto(this.meta.poi[+b.dataset.spot]);
+    }));
+    m.querySelectorAll('[data-guide]').forEach((b) => (b.onclick = () => {
+      this.closeModal();
+      this.hooks.guideTo(this.meta.poi[+b.dataset.guide]);
     }));
     const on = (id, ev, fn) => $(id) && $(id).addEventListener(ev, fn);
     on('mShare', 'click', () => this.hooks.share());
@@ -307,6 +398,9 @@ export class UI {
     on('sInv', 'change', (e) => this._set('invertY', e.target.checked));
     on('sAuto', 'change', (e) => this._set('autoCam', e.target.checked));
     on('sReduce', 'change', (e) => this._set('reduceMotion', e.target.checked));
+    on('sAnn', 'change', (e) => this._set('announce', e.target.checked));
+    on('sAutoT', 'change', (e) => this._set('autoTime', e.target.checked));
+    on('sRain', 'change', (e) => this._set('rain', e.target.checked));
     on('sFps', 'change', (e) => {
       this._set('fps', e.target.checked);
       $('fps').classList.toggle('hidden', !e.target.checked);
@@ -316,6 +410,7 @@ export class UI {
       this.applyLang();
     });
     this.hooks.modal?.(true);
+    m.querySelector('select, input, button[data-spot], #mClose')?.focus({ preventScroll: true });
   }
 
   _set(k, v) {
@@ -327,6 +422,12 @@ export class UI {
     this.modalOpen = null;
     $('modal').classList.add('hidden');
     this.hooks.modal?.(false);
+    try {
+      this.lastFocus?.focus?.({ preventScroll: true });
+    } catch {
+      /* element gone */
+    }
+    this.lastFocus = null;
   }
 
   // ---------------------------------------------------------------------------------------------- photo mode
