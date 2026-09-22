@@ -219,7 +219,15 @@ def studio(coll, res):
     w = bpy.data.worlds.new("StudioWorld")
     sc.world = w
     w.use_nodes = True
-    bg = w.node_tree.nodes["Background"]
+    wnt = w.node_tree
+    bg = wnt.nodes.get("Background")
+    if bg is None:
+        # a world created via bpy.data.worlds.new() after wm.read_factory_settings(use_empty=True) does not always
+        # auto-populate the default Background/World Output pair the way the regular startup file's world does
+        wnt.nodes.clear()
+        bg = wnt.nodes.new("ShaderNodeBackground")
+        wout = wnt.nodes.new("ShaderNodeOutputWorld")
+        wnt.links.new(bg.outputs["Background"], wout.inputs["Surface"])
     bg.inputs["Color"].default_value = (0.42, 0.44, 0.47, 1.0)
     bg.inputs["Strength"].default_value = 0.9
     # floor
@@ -228,8 +236,15 @@ def studio(coll, res):
     fl.name = "Studio_Floor"
     fm = bpy.data.materials.new("MAT_Floor")
     fm.use_nodes = True
-    fm.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = (0.32, 0.33, 0.35, 1)
-    fm.node_tree.nodes["Principled BSDF"].inputs["Roughness"].default_value = 0.8
+    fnt = fm.node_tree
+    fbsdf = fnt.nodes.get("Principled BSDF")
+    if fbsdf is None:  # see the StudioWorld note above — same missing-default-nodes issue can hit a fresh material
+        fnt.nodes.clear()
+        fbsdf = fnt.nodes.new("ShaderNodeBsdfPrincipled")
+        fout = fnt.nodes.new("ShaderNodeOutputMaterial")
+        fnt.links.new(fbsdf.outputs["BSDF"], fout.inputs["Surface"])
+    fbsdf.inputs["Base Color"].default_value = (0.32, 0.33, 0.35, 1)
+    fbsdf.inputs["Roughness"].default_value = 0.8
     fl.data.materials.append(fm)
     for c in fl.users_collection:
         c.objects.unlink(fl)

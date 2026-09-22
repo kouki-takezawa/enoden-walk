@@ -617,8 +617,16 @@ WEB_COLORS = {"MAT_Skin_Body": ("#C08C68", 0.6, 0.0), "MAT_Skin_Head": ("#C48E69
               "MAT_WatchDial": ("#0B0C0E", 0.2, 0.0)}
 
 
-def export_web_character(arm, objs, path, log):
-    """Light glTF for the web viewer: flat colours (procedural nodes do not travel), no corneas, Idle / Walk / Run / Sprint / Jump only."""
+# Phase B1: which parts get a real baked texture (skin's subsurface-scatter material and the fabrics' weave/sheen
+# are the ones actually worth the bake cost — Lips/Eyelids/Brows/Eyeball/HairRoots/Watch/Sneakers/Belt stay on the
+# flat WEB_COLORS fallback, they're tiny on screen and not worth a texture each).
+BAKE_TARGETS = ("Body", "Head", "Shirt", "Trousers")
+
+
+def export_web_character(arm, objs, path, log, bake_dir=None):
+    """Light glTF for the web viewer: no corneas, Idle / Walk / Run / Sprint / Jump only. Body/Head/Shirt/Trousers
+    get a real baked diffuse+roughness+normal texture from their actual procedural material (see bake_tex.py);
+    everything else stays a flat colour approximation (WEB_COLORS) as before."""
     def lin(h):
         h = h.lstrip("#")
         c = [int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4)]
@@ -641,6 +649,9 @@ def export_web_character(arm, objs, path, log):
         b.inputs["Metallic"].default_value = metal
         cache[name] = m
         return m
+    # snapshot the real (procedural) materials before they get swapped for the flat fallback below — this is what
+    # Phase B1's bake step bakes from, once the mesh is in its final (post-subsurf) topology
+    orig_mats = {name: [slot.material for slot in ob.material_slots] for name, ob in objs.items()}
     for name, ob in objs.items():
         if name.startswith("Cornea"):
             continue
@@ -667,6 +678,35 @@ def export_web_character(arm, objs, path, log):
             m.show_viewport = True
         for p_ in me.polygons:
             p_.use_smooth = True
+
+    # ---- Phase B1: bake real textures for BAKE_TARGETS, from the real materials snapshotted above, onto a fresh
+    # smart_project UV (the mesh never had one — the procedural materials use Generated/noise coordinates, not UV,
+    # so this is safe regardless of the UV layout chosen here). The mesh is now in its final, post-subsurf topology.
+    import bake_tex
+    outdir = bake_dir or os.path.join(os.path.dirname(path), "textures")
+    for name in BAKE_TARGETS:
+        ob = objs.get(name)
+        if ob is None or not orig_mats.get(name):
+            continue
+        flat_mats = [slot.material for slot in ob.material_slots]
+        for slot, om in zip(ob.material_slots, orig_mats[name]):
+            slot.material = om
+        try:
+            bake_tex.smart_unwrap(ob)
+            # bake against whichever original material is in the first slot: for Shirt/Trousers this is the main
+            # fabric (Tee/Chino) — the smaller second slot (TeeRib/Belt) shares the same UV space and just keeps
+            # its flat colour below, which is fine at their screen size.
+            paths = bake_tex.bake_to_uv(ob, orig_mats[name][0], outdir, name.lower(), resolution=2048)
+            log("web character bake: %s -> %s" % (name, ", ".join(os.path.basename(p) for p in paths.values())))
+        except Exception as e:
+            log("web character bake failed for %s: %s" % (name, e))
+            paths = None
+        finally:
+            for slot, fm in zip(ob.material_slots, flat_mats):
+                slot.material = fm
+        if paths:
+            _wire_baked_textures(ob.material_slots[0].material, paths)
+
     for a in list(bpy.data.actions):
         if a.name not in ("Male_Idle", "Male_Walk", "Male_Run", "Male_Sprint", "Male_Jump"):
             bpy.data.actions.remove(a)
@@ -679,16 +719,49 @@ def export_web_character(arm, objs, path, log):
     bpy.context.view_layer.objects.active = arm
     valid = set(bpy.ops.export_scene.gltf.get_rna_type().properties.keys())
     want = {"filepath": path, "export_format": "GLB", "use_selection": True, "export_animations": True, "export_animation_mode": "ACTIONS",
-            "export_apply": False, "export_yup": True, "export_texcoords": False, "export_normals": True, "export_image_format": "NONE",
+            "export_apply": False, "export_yup": True, "export_texcoords": True, "export_normals": True, "export_image_format": "AUTO",
             "export_materials": "EXPORT", "export_force_sampling": True, "export_optimize_animation_size": True, "export_skins": True,
             "export_draco_mesh_compression_enable": True, "export_draco_mesh_compression_level": 7, "export_draco_position_quantization": 14,
-            "export_draco_normal_quantization": 8, "export_draco_generic_quantization": 12}
+            "export_draco_normal_quantization": 8, "export_draco_generic_quantization": 12, "export_draco_texcoord_quantization": 11}
     kw = {k: v for k, v in want.items() if k in valid}
     try:
         bpy.ops.export_scene.gltf(**kw)
         log("web character glb: %s (%.2f MB)" % (path, os.path.getsize(path) / 1e6))
     except Exception as e:
         log("web character export failed:", e)
+
+
+def _wire_baked_textures(mat, paths):
+    """Adds permanent Image Texture nodes to `mat` (one of export_web_character()'s flat W_ materials) for
+    whichever of diffuse/roughness/normal actually baked, wired into its Principled BSDF. Unlike the temporary
+    nodes bake_to_uv() creates and removes, these stay — this is what the glTF exporter picks up."""
+    nt = mat.node_tree
+    bsdf = next(n for n in nt.nodes if n.type == "BSDF_PRINCIPLED")
+    x = bsdf.location.x - 320
+    if "diffuse" in paths:
+        img = bpy.data.images.load(paths["diffuse"])
+        img.colorspace_settings.name = "sRGB"
+        n = nt.nodes.new("ShaderNodeTexImage")
+        n.image = img
+        n.location = (x, bsdf.location.y + 200)
+        nt.links.new(n.outputs["Color"], bsdf.inputs["Base Color"])
+    if "roughness" in paths:
+        img = bpy.data.images.load(paths["roughness"])
+        img.colorspace_settings.name = "Non-Color"
+        n = nt.nodes.new("ShaderNodeTexImage")
+        n.image = img
+        n.location = (x, bsdf.location.y)
+        nt.links.new(n.outputs["Color"], bsdf.inputs["Roughness"])
+    if "normal" in paths:
+        img = bpy.data.images.load(paths["normal"])
+        img.colorspace_settings.name = "Non-Color"
+        n = nt.nodes.new("ShaderNodeTexImage")
+        n.image = img
+        n.location = (x, bsdf.location.y - 200)
+        nm = nt.nodes.new("ShaderNodeNormalMap")
+        nm.location = (x + 160, bsdf.location.y - 200)
+        nt.links.new(n.outputs["Color"], nm.inputs["Color"])
+        nt.links.new(nm.outputs["Normal"], bsdf.inputs["Normal"])
 
 
 def render_sheet(arm, act, frames, outpath, cam, log, res=(300, 400)):
