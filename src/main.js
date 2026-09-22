@@ -67,6 +67,7 @@ try {
 }
 const gl = renderer.gl;
 renderer.setMotionBlur(settings.quality === 'ultra' && settings.motionBlur);
+renderer.setDof(settings.quality === 'ultra' && settings.dof);
 const hemi = new THREE.HemisphereLight(0xffffff, 0x888888, 0.6);
 const sunLight = new THREE.DirectionalLight(0xffffff, 3);
 sunLight.castShadow = true;
@@ -545,6 +546,7 @@ const hooks = {
       sound.applyVolume();
     } else if (key === 'viewMode' && settings.viewMode !== 'lock') document.exitPointerLock?.();
     else if (key === 'motionBlur') renderer.setMotionBlur(settings.motionBlur);
+    else if (key === 'dof') renderer.setDof(settings.dof);
     else if (key === 'lang') {
       ui.lastWhere = '';
       ui.lastTrain = '';
@@ -983,7 +985,8 @@ function frame(now) {
     if (renderer.ema > 27 && renderer.dpr <= renderer.baseDpr * 0.7) slow += dt;
     else slow = Math.max(0, slow - dt);
     if (slow > 5 && level !== 'low') {
-      applyQuality(level === 'high' ? 'medium' : 'low');
+      const STEP_DOWN = { ultra: 'high', high: 'medium', medium: 'low' };
+      applyQuality(STEP_DOWN[level] ?? 'low');
       ui.showMsg(t('quality_now', { q: t(`q_${level}`) }), 2500);
       slow = 0;
     }

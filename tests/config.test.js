@@ -12,7 +12,7 @@ describe('config', () => {
       expect(tJa(k)).not.toBe(k);
       expect(tEn(k)).not.toBe(k);
     }
-    expect(mod.autoPreset()).toMatch(/low|medium|high/);
+    expect(mod.autoPreset()).toMatch(/low|medium|high|ultra/);
   });
 
   it('has every announcement / telop string in both languages', () => {
