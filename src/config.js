@@ -8,7 +8,7 @@ export const PRESETS = {
 };
 
 export const DEFAULTS = {
-  quality: 'auto', // auto | low | medium | high
+  quality: 'high', // auto | low | medium | high
   time: 'dusk', // day | dusk | night
   volume: 0.8,
   muted: false,
