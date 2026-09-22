@@ -82,10 +82,19 @@ export class Traffic {
     this._apply(0);
   }
 
-  update(dt, night) {
+  update(dt, night, crossingAlarm) {
     if (!this.cars.length) return;
     for (const c of this.cars) {
-      const step = (c.east ? 1 : -1) * c.speed * dt;
+      let speed = c.speed;
+      if (crossingAlarm) {
+        // x=0 is the crossing (track centreline, enoden_kamakurakokomae.py's origin) — Route 134 here runs a few
+        // metres further out in z than the barrier arms themselves (the barrier box is `|z|<3.6`, the lanes are
+        // z=7/11.5), so this reads as "traffic backs up near the crossing" rather than a literal stop-at-the-arm;
+        // an approximation, not exact — see the plan's note on this being a re-added, previously scope-cut item.
+        const ahead = c.east ? -c.x : c.x; // remaining distance to x=0 along this car's own travel direction, negative once past it
+        if (ahead > 0 && ahead < 12) speed *= Math.max(0, (ahead - 2) / 10); // ease to a stop ~2m short of the crossing
+      }
+      const step = (c.east ? 1 : -1) * speed * dt;
       c.x += step;
       c.roll -= step / WHEEL_R;
       const span = ROAD_X1 - ROAD_X0;

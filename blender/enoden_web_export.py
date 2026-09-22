@@ -377,6 +377,7 @@ def run(outdir, footprints, web_trees, cfg, log, lamps=()):
     os.makedirs(outdir, exist_ok=True)
     to_mesh_objects()
     train = bpy.data.objects.get("Enoden_1000_TwoCar")            # its origin is the track centre; the cab end is at x = train_front_x
+    train_wheels = bpy.data.objects.get("Enoden_1000_Wheels")     # separate node (parented to `train`) so it can be spun independently at runtime
     dg0 = bpy.context.evaluated_depsgraph_get()
     walk_bvh = []
     for ob in bpy.data.objects:                                    # walkable surfaces (before anything is merged / renamed)
@@ -518,6 +519,9 @@ def run(outdir, footprints, web_trees, cfg, log, lamps=()):
     if train is not None:
         for slot in train.material_slots:
             slot.material = web_material(slot.material)
+    if train_wheels is not None:
+        for slot in train_wheels.material_slots:
+            slot.material = web_material(slot.material)
     # alarm lamps: dedicated materials so that the viewer can swap them
     lamp_on = bpy.data.materials.new("LampBright")
     lamp_off = bpy.data.materials.new("LampDark")
@@ -565,7 +569,8 @@ def run(outdir, footprints, web_trees, cfg, log, lamps=()):
             world_objs.append(o)
     export_objects(world_objs, os.path.join(outdir, "world.glb"), texcoords=True)
     if train is not None:
-        export_objects([train], os.path.join(outdir, "train.glb"))
+        train_objs = [train, train_wheels] if train_wheels is not None else [train]
+        export_objects(train_objs, os.path.join(outdir, "train.glb"))
 
     # ---- trees (instanced in the viewer)
     tj = [[k, round(x, 2), round(z, 2), round(-y, 2), round(h, 2), round(w, 2), round(r, 2)] for (k, x, y, z, w, h, r) in web_trees]

@@ -158,7 +158,7 @@ const trainLookPos = new THREE.Vector3();
 // ---------------------------------------------------------------------------------------------------- loading
 // decoded sizes in bytes: progress is measured against them because the server compresses (content-length is the encoded size)
 const SIZES = {
-  meta: 2400, ground: 492984, surface: 123246, solid: 123246, trees: 103893, world: 4097256, train: 271868,
+  meta: 2393, ground: 492984, surface: 123246, solid: 123246, trees: 103893, world: 4100056, train: 303360,
   character: 852648, cars: 201536, ped0: 4961024, ped1: 4926104,
 };
 const PED_FILES = ['ped0', 'ped1'];
@@ -798,7 +798,7 @@ function updateVisuals(dt) {
   gulls.userData.update(dt, cur.night, cur.lightColor);
   stepFx.update(dt, player, player.root.visible && !player.riding, cur.night, pxScale);
   pedestrians.update(dt, player.pos);
-  traffic.update(dt, cur.night);
+  traffic.update(dt, cur.night, train.alarm);
 }
 
 // ---------------------------------------------------------------------------------------------------- camera
