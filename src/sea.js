@@ -60,13 +60,11 @@ function depthTexture(ground, level) {
   return tex;
 }
 
-export function makeSea(ground, level, useDepth) {
-  const geo = new THREE.PlaneGeometry(60000, 60000);
-  geo.rotateX(-Math.PI / 2);
-  const normalMap = ripples();
-  const mat = new THREE.MeshStandardMaterial({ color: 0x2f7d86, roughness: 0.14, metalness: 0.04, normalMap, normalScale: new THREE.Vector2(0.5, 0.5) });
-  const depthTex = useDepth ? depthTexture(ground, level) : null;
-  mat.customProgramCacheKey = () => `sea${useDepth ? 1 : 0}`;
+/** Builds the sea shader (colour by depth, sun glitter, foam) on `mat` and, when `displace` is true (Phase C5.1,
+ *  ultra preset only), adds a vertex-shader wave height field on top. The huge far plane shares the same look but
+ *  is only 2 triangles, so displacing it would just tilt its 4 corners — `displace` must stay off for it. */
+function applySeaShader(mat, ground, level, useDepth, depthTex, displace) {
+  mat.customProgramCacheKey = () => `sea${useDepth ? 1 : 0}${displace ? 'd' : ''}`;
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uTime = U.uTime;
     shader.uniforms.uNight = U.uNight;
@@ -75,7 +73,23 @@ export function makeSea(ground, level, useDepth) {
     shader.uniforms.uSunCol = U.uSunCol;
     shader.uniforms.uDepth = { value: depthTex };
     shader.uniforms.uGrid = { value: new THREE.Vector4(ground.x0, ground.y0, ground.nx * ground.step, ground.ny * ground.step) };
-    shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWPos;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>\nvarying vec3 vWPos;\nuniform float uTime;\nfloat seaVHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }\nfloat seaVNoise(vec2 p) { vec2 i = floor(p); vec2 f = fract(p); f = f * f * (3.0 - 2.0 * f); return mix(mix(seaVHash(i), seaVHash(i + vec2(1.0, 0.0)), f.x), mix(seaVHash(i + vec2(0.0, 1.0)), seaVHash(i + vec2(1.0, 1.0)), f.x), f.y); }`)
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+        vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+        ${
+          displace
+            ? `{
+          float w1 = seaVNoise(vWPos.xz * 0.05 + vec2(uTime * 0.10, uTime * 0.07)) - 0.5;
+          float w2 = seaVNoise(vWPos.xz * 0.14 - vec2(uTime * 0.16, uTime * 0.05)) - 0.5;
+          float w3 = seaVNoise(vWPos.xz * 0.4 + vec2(uTime * 0.3, -uTime * 0.22)) - 0.5;
+          transformed.y += w1 * 0.34 + w2 * 0.14 + w3 * 0.045;
+        }`
+            : ''
+        }`,
+      );
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', '#include <common>\nuniform float uTime; uniform float uNight; uniform float uGlit; uniform sampler2D uDepth; uniform vec4 uGrid; varying vec3 vWPos;\nfloat seaHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }\nfloat seaNoise(vec2 p) { vec2 i = floor(p); vec2 f = fract(p); f = f * f * (3.0 - 2.0 * f); return mix(mix(seaHash(i), seaHash(i + vec2(1.0, 0.0)), f.x), mix(seaHash(i + vec2(0.0, 1.0)), seaHash(i + vec2(1.0, 1.0)), f.x), f.y); }')
       .replace(
@@ -117,8 +131,34 @@ export function makeSea(ground, level, useDepth) {
         }`,
       );
   };
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.y = level + 0.02;
-  mesh.userData.normalMap = normalMap;
-  return mesh;
+  mat.needsUpdate = true;
+}
+
+export function makeSea(ground, level, useDepth, waves) {
+  const group = new THREE.Group();
+  const normalMap = ripples();
+  const depthTex = useDepth ? depthTexture(ground, level) : null;
+  const matParams = { color: 0x2f7d86, roughness: 0.14, metalness: 0.04, normalMap, normalScale: new THREE.Vector2(0.5, 0.5) };
+
+  const farGeo = new THREE.PlaneGeometry(60000, 60000);
+  farGeo.rotateX(-Math.PI / 2);
+  const farMat = new THREE.MeshStandardMaterial(matParams);
+  applySeaShader(farMat, ground, level, useDepth, depthTex, false);
+  group.add(new THREE.Mesh(farGeo, farMat));
+
+  if (waves) {
+    // Phase C5.1: a finely subdivided patch near the player only (the far plane stays flat, see applySeaShader) so
+    // the vertex-shader wave field actually has geometry to displace, without paying for a 60 km subdivided plane.
+    const nearGeo = new THREE.PlaneGeometry(360, 360, 144, 144);
+    nearGeo.rotateX(-Math.PI / 2);
+    const nearMat = new THREE.MeshStandardMaterial(matParams);
+    applySeaShader(nearMat, ground, level, useDepth, depthTex, true);
+    const nearMesh = new THREE.Mesh(nearGeo, nearMat);
+    nearMesh.position.y = 0.025; // a hair above the far plane: avoids z-fighting at the seam, invisible from a walking eye height
+    group.add(nearMesh);
+  }
+
+  group.position.y = level + 0.02;
+  group.userData.normalMap = normalMap;
+  return group;
 }

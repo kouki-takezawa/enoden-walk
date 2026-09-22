@@ -55,17 +55,18 @@ document.body.dataset.handed = settings.handed;
 
 // ---------------------------------------------------------------------------------------------------- renderer / scene
 const canvas = $('c');
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0xe9c6a0, 0.00085);
+const camera = new THREE.PerspectiveCamera(58, innerWidth / innerHeight, 0.3, 150000);
 let renderer;
 try {
-  renderer = new Renderer(canvas, preset, { govern: !params.has('nogov') });
+  renderer = new Renderer(canvas, preset, { govern: !params.has('nogov'), scene, camera });
 } catch (err) {
   $('loadtext').textContent = t('nowebgl');
   throw err;
 }
 const gl = renderer.gl;
-const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0xe9c6a0, 0.00085);
-const camera = new THREE.PerspectiveCamera(58, innerWidth / innerHeight, 0.3, 150000);
+renderer.setMotionBlur(settings.quality === 'ultra' && settings.motionBlur);
 const hemi = new THREE.HemisphereLight(0xffffff, 0x888888, 0.6);
 const sunLight = new THREE.DirectionalLight(0xffffff, 3);
 sunLight.castShadow = true;
@@ -75,7 +76,7 @@ sunLight.shadow.camera.near = 1;
 sunLight.shadow.camera.far = 320;
 sunLight.shadow.autoUpdate = false; // refreshed only when something inside the box moved (see updateShadow)
 scene.add(hemi, sunLight, sunLight.target);
-const sky = makeSky(preset.clouds);
+const sky = makeSky(preset.clouds, preset.skyPhysical);
 scene.add(sky);
 const lampsPos = [];
 let pointLights = [];
@@ -143,6 +144,7 @@ const camPos = new THREE.Vector3();
 const camTarget = new THREE.Vector3();
 const tmpA = new THREE.Vector3();
 const tmpB = new THREE.Vector3();
+const trainLookPos = new THREE.Vector3();
 
 // ---------------------------------------------------------------------------------------------------- loading
 // decoded sizes in bytes: progress is measured against them because the server compresses (content-length is the encoded size)
@@ -214,7 +216,7 @@ async function load() {
   scene.add(worldRoot);
   treesGroup = makeTrees(trees, preset);
   scene.add(treesGroup);
-  sea = makeSea(ground, meta.sea_level, preset.seaDepth);
+  sea = makeSea(ground, meta.sea_level, preset.seaDepth, preset.waves);
   scene.add(sea);
   rain = makeRain();
   scene.add(rain);
@@ -291,6 +293,7 @@ function applyQuality(name) {
   renderer.apply(preset);
   applyShadow();
   sky.material.defines.CLOUDS = preset.clouds ? 1 : 0;
+  sky.material.defines.PHYSICAL = preset.skyPhysical ? 1 : 0;
   sky.material.needsUpdate = true;
   if (!ready) return;
   styleWorld(worldRoot, preset);
@@ -300,7 +303,7 @@ function applyQuality(name) {
   updateTreeLOD(treesGroup, player.pos.x, player.pos.z, preset.shadowRange);
   player.setDetail(preset.detail);
   disposeGroup(sea);
-  sea = makeSea(ground, meta.sea_level, preset.seaDepth);
+  sea = makeSea(ground, meta.sea_level, preset.seaDepth, preset.waves);
   scene.add(sea);
   buildPointLights();
 }
@@ -537,6 +540,7 @@ const hooks = {
       sound.muted = settings.muted;
       sound.applyVolume();
     } else if (key === 'viewMode' && settings.viewMode !== 'lock') document.exitPointerLock?.();
+    else if (key === 'motionBlur') renderer.setMotionBlur(settings.motionBlur);
     else if (key === 'lang') {
       ui.lastWhere = '';
       ui.lastTrain = '';
@@ -749,6 +753,12 @@ function updateVisuals(dt) {
     u.uVig.value = cur.vig;
     u.uTime.value = elapsed % 100;
   }
+  if (renderer.grade) {
+    renderer.grade.uniforms.uAspect.value = camera.aspect;
+    renderer.grade.uniforms.uTime.value = elapsed % 100;
+  }
+  if (renderer.ssao) renderer.updateAoBox(player.pos);
+  if (renderer.dof) renderer.setFocus(Math.max(2, camDistEff));
 
   const pxScale = (0.5 * gl.domElement.height) / Math.tan((camera.fov * Math.PI) / 360);
   deckPools.update(cur.night);
@@ -880,6 +890,11 @@ function frame(now) {
   const cmd = isBlocked() ? ZERO : input.read();
   train.update(dt, tod.night, tod.cur.glow);
   trainEvents(dt);
+  // C4.3: glance toward an approaching / dwelling train instead of staring straight ahead while waiting
+  if (!player.riding && (train.state === 'arriving' || train.state === 'dwell')) {
+    trainLookPos.copy(train.group.position).setY(1.5);
+    player.lookTarget = trainLookPos;
+  } else player.lookTarget = null;
   const eff = steerCommand(dt, cmd);
   if (started && !player.riding && !photo) {
     player.update(dt, eff, camYaw, gate);

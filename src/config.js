@@ -1,10 +1,18 @@
 // Quality presets, persisted user settings and the (ja / en) strings.
 const KEY = 'enoden-walk.settings.v1';
 
+// bump/ssao/dof/motionBlur are new (ultra-only) effects; smaa/atmos gate the shared postprocess passes (see render.js).
+// atmos mirrors the old implicit bloom||msaa gate exactly, so low/medium/high keep their pre-existing look untouched;
+// smaa (edge antialiasing) and the chromatic-aberration/grain pass are cheap enough to run on every preset instead.
 export const PRESETS = {
-  low: { dpr: 1.0, shadow: 1024, shadowRange: 34, bloom: false, msaa: 0, leafCards: false, detail: 0, clouds: false, wind: false, pointLights: 1, seaDepth: false, glow: true },
-  medium: { dpr: 1.25, shadow: 2048, shadowRange: 50, bloom: true, msaa: 0, leafCards: true, detail: 1, clouds: true, wind: true, pointLights: 2, seaDepth: true, glow: true },
-  high: { dpr: 1.75, shadow: 4096, shadowRange: 70, bloom: true, msaa: 4, leafCards: true, detail: 2, clouds: true, wind: true, pointLights: 4, seaDepth: true, glow: true },
+  low: { dpr: 1.0, shadow: 1024, shadowRange: 34, bloom: false, msaa: 0, leafCards: false, detail: 0, clouds: false, wind: false, pointLights: 1, seaDepth: false, glow: true, bump: false, ssao: false, dof: false, motionBlur: false, smaa: true, atmos: false, waves: false, flutter: false, skyPhysical: false },
+  medium: { dpr: 1.25, shadow: 2048, shadowRange: 50, bloom: true, msaa: 0, leafCards: true, detail: 1, clouds: true, wind: true, pointLights: 2, seaDepth: true, glow: true, bump: false, ssao: false, dof: false, motionBlur: false, smaa: true, atmos: true, waves: false, flutter: false, skyPhysical: false },
+  high: { dpr: 1.75, shadow: 4096, shadowRange: 70, bloom: true, msaa: 4, leafCards: true, detail: 2, clouds: true, wind: true, pointLights: 4, seaDepth: true, glow: true, bump: false, ssao: false, dof: false, motionBlur: false, smaa: true, atmos: true, waves: false, flutter: false, skyPhysical: false },
+  // charShadow (C5.3): a real second shadow-only light would double-light the character in three.js's standard
+  // pipeline (there is no per-object "light layer" exclusion for illumination, only for shadow-map culling), so
+  // this doubles the shared shadow map's resolution instead (8192 vs 4096) — same "crisper self-shadow" result,
+  // without the risk of a visible brightness seam around the character.
+  ultra: { dpr: 1.75, shadow: 8192, shadowRange: 70, bloom: true, msaa: 4, leafCards: true, detail: 2, clouds: true, wind: true, pointLights: 4, seaDepth: true, glow: true, bump: true, ssao: true, dof: true, motionBlur: true, smaa: true, atmos: true, waves: true, flutter: true, skyPhysical: true },
 };
 
 export const DEFAULTS = {
@@ -21,6 +29,7 @@ export const DEFAULTS = {
   announce: true, // spoken station announcements (Web Speech API)
   autoTime: false, // day -> dusk -> night cycle
   rain: false,
+  motionBlur: false, // ultra quality only; off by default even there (motion-sickness risk)
   reduceMotion: typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches,
   handed: 'right', // right | left — which side the touch move-stick sits on
 };
@@ -82,6 +91,8 @@ const STR = {
     q_low: '低',
     q_medium: '中',
     q_high: '高',
+    q_ultra: '最高',
+    motionBlur: 'モーションブラー',
     volume: '音量',
     mute: 'ミュート',
     sens: '視点の感度',
@@ -204,6 +215,8 @@ const STR = {
     q_low: 'Low',
     q_medium: 'Medium',
     q_high: 'High',
+    q_ultra: 'Ultra',
+    motionBlur: 'Motion blur',
     volume: 'Volume',
     mute: 'Mute',
     sens: 'Look sensitivity',

@@ -431,7 +431,8 @@ export class UI {
       const sel = (id, opts, val) => `<select id="${id}">${opts.map(([v, l]) => `<option value="${v}"${v === val ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
       body = `<h2>${t('settings')}</h2>
         <label>${t('time')} ${sel('sTime', [['day', t('day')], ['dusk', t('dusk')], ['night', t('night')]], this.s.time)}</label>
-        <label>${t('quality')} ${sel('sQuality', [['auto', t('q_auto')], ['low', t('q_low')], ['medium', t('q_medium')], ['high', t('q_high')]], this.s.quality)}</label>
+        <label>${t('quality')} ${sel('sQuality', [['auto', t('q_auto')], ['low', t('q_low')], ['medium', t('q_medium')], ['high', t('q_high')], ['ultra', t('q_ultra')]], this.s.quality)}</label>
+        ${this.s.quality === 'ultra' ? `<label><input id="sMotionBlur" type="checkbox" ${this.s.motionBlur ? 'checked' : ''}> ${t('motionBlur')}</label>` : ''}
         <label>${t('volume')} <input id="sVol" type="range" min="0" max="1" step="0.05" value="${this.s.volume}"></label>
         <label><input id="sMute" type="checkbox" ${this.s.muted ? 'checked' : ''}> ${t('mute')}</label>
         <label>${t('viewMode')} ${sel('sView', [['drag', t('vm_drag')], ['right', t('vm_right')], ['lock', t('vm_lock')]], this.s.viewMode)}</label>
@@ -464,7 +465,11 @@ export class UI {
     const on = (id, ev, fn) => $(id) && $(id).addEventListener(ev, fn);
     on('mShare', 'click', () => this.hooks.share());
     on('sTime', 'change', (e) => this.hooks.setTime(e.target.value));
-    on('sQuality', 'change', (e) => this._set('quality', e.target.value));
+    on('sQuality', 'change', (e) => {
+      this._set('quality', e.target.value);
+      this.openModal('settings'); // re-render: the motion-blur toggle only shows for the ultra preset
+    });
+    on('sMotionBlur', 'change', (e) => this._set('motionBlur', e.target.checked));
     on('sVol', 'input', (e) => this._set('volume', +e.target.value));
     on('sMute', 'change', (e) => this._set('muted', e.target.checked));
     on('sView', 'change', (e) => this._set('viewMode', e.target.value));

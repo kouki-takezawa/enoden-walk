@@ -77,6 +77,8 @@ npm test         # 単体テスト（ground / train / config）
 npm run build    # dist/ へビルド
 ```
 
+`npm install` が使えない環境向けの、ビルド不要の代替確認手段は [tools/README.md](tools/README.md) 参照。画質向上・人物動作のリアル化の実装計画は [docs/plan-visual-quality-and-animation.md](docs/plan-visual-quality-and-animation.md) にまとめてあります。
+
 URL パラメータ（動作確認用）: `?q=low|medium|high`（品質）、`?t=day|dusk|night`（時刻）、`?lang=en`、`?fps`（FPS 表示）、`?nogov`（解像度の自動調整を止める）。
 
 ## モデルを作り直す（Blender 5.2 が必要）

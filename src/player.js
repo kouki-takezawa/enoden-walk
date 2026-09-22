@@ -5,6 +5,10 @@ const smooth = (e0, e1, x) => {
   const t = clamp((x - e0) / (e1 - e0), 0, 1);
   return t * t * (3 - 2 * t);
 };
+// bones the procedural pose layer (Phase C4) drives on top of the 5 baked clips; see Player._proceduralPose
+const BONE_NAMES = ['Hips', 'Spine', 'Spine1', 'Spine2', 'Neck', 'Head', 'LeftArm', 'RightArm', 'LeftFoot', 'RightFoot', 'LeftToe', 'RightToe'];
+const UP_Y = new THREE.Vector3(0, 1, 0);
+const RIGHT_X = new THREE.Vector3(1, 0, 0);
 
 export const SPEED = { walk: 1.25, run: 2.9, sprint: 6.0 }; // m/s = design speeds of the baked cycles
 const NOMINAL = { walk: 32 / 30, run: 22 / 30, sprint: 15 / 30, idle: 4.0 };
@@ -52,6 +56,46 @@ export class Player {
       this.act[key] = a;
     }
     this.jumpDur = this.act.jump ? this.act.jump.getClip().duration : 1.5;
+
+    // ---- Phase C4: procedural pose layer, applied on top of the baked clips (see _proceduralPose).
+    // Rotating a bone by a fixed "character space" axis (e.g. "pitch forward") means conjugating that axis-angle
+    // into the bone's own local frame by its parent's rest orientation first: `bone.quaternion` is local-to-parent,
+    // and most parent/child pairs on this rig are not co-directional (shoulder -> arm, knee -> ankle, ...), so a
+    // naive local-space multiply would rotate around the wrong effective axis on those joints. See _delta().
+    this.bones = {};
+    const allBones = [];
+    this.model.traverse((o) => {
+      if (!o.isBone) return;
+      allBones.push(o);
+      if (BONE_NAMES.includes(o.name)) this.bones[o.name] = o;
+    });
+    this.proc = BONE_NAMES.every((n) => this.bones[n]); // false in tests, which build a Player from a bone-less stub gltf
+    if (this.proc) {
+      const restLocal = new Map(allBones.map((o) => [o, o.quaternion.clone()])); // bones are still at bind pose: mixer.update() hasn't run yet
+      const restArmCache = new Map();
+      const restArm = (o) => {
+        if (!o || !o.isBone) return new THREE.Quaternion();
+        if (!restArmCache.has(o)) restArmCache.set(o, restLocal.get(o).clone().premultiply(restArm(o.parent)));
+        return restArmCache.get(o);
+      };
+      this.parentRestQ = {};
+      this.parentRestQInv = {};
+      for (const name of BONE_NAMES) {
+        const q = restArm(this.bones[name].parent).clone();
+        this.parentRestQ[name] = q;
+        this.parentRestQInv[name] = q.clone().invert();
+      }
+    }
+    this.yawVel = 0;
+    this.breathT = 0;
+    this.stopLean = 0; // 0..1, decays after a hard stop
+    this.headYaw = 0;
+    this.headPitch = 0;
+    this._prevSpeed = 0;
+    this._q = new THREE.Quaternion();
+    this._v3 = new THREE.Vector3();
+    this.lookTarget = null; // world-space Vector3 the head/neck should glance toward (e.g. an approaching train), or null
+
     this.apply();
   }
 
@@ -102,8 +146,10 @@ export class Player {
       const ty = Math.atan2(this.lastDir.x, this.lastDir.y);
       let d = ty - this.yaw;
       d = Math.atan2(Math.sin(d), Math.cos(d));
-      this.yaw += clamp(d, -12 * dt, 12 * dt);
-    }
+      const dy = clamp(d, -7 * dt, 7 * dt); // was 12 rad/s: a touch slower so the C4.1 spine lean reads as a lean, not a snap
+      this.yaw += dy;
+      if (dt > 0) this.yawVel += (dy / dt - this.yawVel) * Math.min(1, dt * 10);
+    } else if (dt > 0) this.yawVel += (0 - this.yawVel) * Math.min(1, dt * 6);
 
     // ---- move with wall / fence / slope / gate checks (axis-separated sliding)
     if (this.speed > 0.02) {
@@ -185,7 +231,88 @@ export class Player {
     this._act('sprint', w.sprint * (1 - wj), this.phase * NOMINAL.sprint);
     this._act('jump', wj, Math.min(this.jumpT ?? 0, this.jumpDur - 0.02));
     this.mixer.update(0);
+    if (this.proc && wj < 0.5) this._proceduralPose(dt, s, w.sprint * (1 - wj));
+    this._prevSpeed = s;
     this.apply();
+  }
+
+  /** Rotates `name` by `angle` around a fixed character-space `axis` ("up" / "right", not the bone's own local
+   *  axes), on top of whatever the mixer already wrote to it this frame. See the constructor comment for why this
+   *  needs to be conjugated through the bone's parent's rest orientation rather than a plain local multiply. */
+  _delta(name, axis, angle) {
+    if (!angle) return;
+    this._q.setFromAxisAngle(axis, angle).premultiply(this.parentRestQInv[name]).multiply(this.parentRestQ[name]);
+    this.bones[name].quaternion.premultiply(this._q);
+  }
+
+  /** Phase C4: small additive bone rotations layered on the baked clips (skipped mid-jump, wj >= 0.5) —
+   *  turn lean, foot ground-snap, head/neck look-at, breathing sway, in-place contrapposto, stop lean, sprint arm punch. */
+  _proceduralPose(dt, s, sprintW) {
+    const k = Math.min(1, dt * 12); // shared smoothing rate for the sway/lean states below
+
+    // C4.1: lean the spine into the turn (proportional to how fast the character is yawing)
+    const turn = clamp(this.yawVel / 7, -1, 1);
+    this._delta('Spine1', UP_Y, turn * 0.16);
+    this._delta('Spine2', UP_Y, turn * 0.10);
+
+    // C4.5: contrapposto — while nearly stationary but still turning, counter-twist the hips against the lean above
+    const stillness = 1 - smooth(0, SPEED.walk * 0.6, s);
+    if (stillness > 0.01) this._delta('Hips', UP_Y, -turn * 0.22 * stillness);
+
+    // C4.6: a hard stop pitches the upper body forward slightly (inertia), then eases back out
+    const decel = Math.max(0, this._prevSpeed - s) / Math.max(dt, 1e-4);
+    this.stopLean += ((decel > 3.5 ? Math.min(1, decel / 12) : 0) - this.stopLean) * (decel > 3.5 ? Math.min(1, dt * 16) : Math.min(1, dt * 3));
+    this._delta('Spine', RIGHT_X, this.stopLean * 0.14);
+
+    // C4.4: idle/walking breathing sway, deeper and quicker the faster the character has been moving (out of breath)
+    const effort = clamp(s / SPEED.sprint, 0, 1);
+    this.breathT += dt * (1.1 + effort * 1.6);
+    const breath = Math.sin(this.breathT) * (0.012 + effort * 0.02);
+    this._delta('Spine', RIGHT_X, breath);
+    this._delta('Spine2', RIGHT_X, breath);
+
+    // C4.7: sprinting punches the arm swing a bit further than the baked clip alone
+    if (sprintW > 0.01) {
+      const swing = Math.sin(this.phase * Math.PI * 2) * sprintW * 0.22;
+      this._delta('LeftArm', RIGHT_X, swing);
+      this._delta('RightArm', RIGHT_X, -swing);
+    }
+
+    // C4.3: head / neck glance toward the look target (an approaching train, set from outside), capped well short
+    // of anatomical limits; eases back to facing forward when no target is set
+    let ty = 0;
+    let tp = 0;
+    if (this.lookTarget) {
+      this._v3.copy(this.lookTarget).sub(this.pos);
+      const dist = Math.hypot(this._v3.x, this._v3.z) || 1;
+      let d = Math.atan2(this._v3.x, this._v3.z) - this.yaw;
+      d = Math.atan2(Math.sin(d), Math.cos(d));
+      ty = clamp(d, -0.9, 0.9);
+      tp = clamp(Math.atan2(this._v3.y, dist), -0.5, 0.5);
+    }
+    this.headYaw += (ty - this.headYaw) * k;
+    this.headPitch += (tp - this.headPitch) * k;
+    this._delta('Neck', UP_Y, this.headYaw * 0.6);
+    this._delta('Neck', RIGHT_X, -this.headPitch * 0.6);
+    this._delta('Head', UP_Y, this.headYaw * 0.4);
+    this._delta('Head', RIGHT_X, -this.headPitch * 0.4);
+
+    // C4.2: foot ground-snap — nudge the ankle to close small height gaps the baked cycle leaves on slopes/curbs.
+    // Needs this frame's world matrices (mixer.update + the tweaks above don't touch them; the renderer's own
+    // updateMatrixWorld only runs later, after this), so refresh the model's subtree before reading foot positions.
+    this.model.updateMatrixWorld(true);
+    this._footSnap('LeftFoot');
+    this._footSnap('RightFoot');
+  }
+
+  _footSnap(name) {
+    const bone = this.bones[name];
+    bone.getWorldPosition(this._v3);
+    const gy = this.ground.height(this._v3.x, this._v3.z);
+    if (gy !== gy) return; // off the height grid
+    const dy = clamp(gy - this._v3.y, -0.12, 0.12);
+    if (Math.abs(dy) < 0.005) return;
+    this._delta(name, RIGHT_X, clamp(dy * 2.2, -0.35, 0.35));
   }
 
   _act(name, weight, time) {

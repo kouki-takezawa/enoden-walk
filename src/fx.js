@@ -20,6 +20,38 @@ float fxNoise(vec2 p) {
   f = f * f * (3.0 - 2.0 * f);
   return mix(mix(fxHash(i), fxHash(i + vec2(1.0, 0.0)), f.x), mix(fxHash(i + vec2(0.0, 1.0)), fxHash(i + vec2(1.0, 1.0)), f.x), f.y);
 }
+// second, higher-frequency octave layered on top of fxNoise (used by the bump / roughness helpers below)
+float fxNoise2(vec2 p) { return fxNoise(p) * 0.62 + fxNoise(p * 2.37 + 5.2) * 0.38; }
+float fxRoughNoise(vec3 P, float freq) { return fxNoise(P.xz * freq) * 0.6 + fxNoise(P.xz * freq * 3.1 + 17.0) * 0.4; }
+// Derivative-based bump mapping (Mikkelsen, "bump mapping unparametrized surfaces on the GPU"): perturbs the
+// already-computed surface normal from a scalar height field h(P), using only screen-space derivatives of the
+// world position and of h. No tangent attribute / normal map texture / tileable UV is required, which is why
+// it is used here instead of a real normalMap: the wall / terrain / road / deck meshes have no image textures
+// and their UVs (where they exist at all) are not laid out for texel-space normal mapping.
+vec3 fxBump(vec3 N, vec3 P, float h, float amp) {
+  vec3 dPdx = dFdx(P);
+  vec3 dPdy = dFdy(P);
+  float dHdx = dFdx(h);
+  float dHdy = dFdy(h);
+  vec3 r1 = cross(dPdy, N);
+  vec3 r2 = cross(N, dPdx);
+  float det = dot(dPdx, r1);
+  vec3 grad = (dHdx * r1 + dHdy * r2) / max(1e-6, abs(det));
+  return normalize(N - amp * grad * sign(det));
+}
+// Cheap single-sample parallax (not full occlusion marching): offsets a UV-like coordinate along the surface's
+// own tangent/bitangent (solved from the P<->uv derivative pair, so it needs no vertex tangent attribute either).
+vec2 fxParallax(vec3 P, vec2 uv, vec3 V, float depth) {
+  vec3 dPdx = dFdx(P);
+  vec3 dPdy = dFdy(P);
+  vec2 dUVdx = dFdx(uv);
+  vec2 dUVdy = dFdy(uv);
+  float det = dUVdx.x * dUVdy.y - dUVdy.x * dUVdx.y;
+  float invDet = 1.0 / max(1e-6, abs(det));
+  vec3 T = normalize((dPdx * dUVdy.y - dPdy * dUVdx.y) * invDet);
+  vec3 B = normalize((dPdy * dUVdx.x - dPdx * dUVdy.x) * invDet);
+  return vec2(dot(V, T), dot(V, B)) * depth;
+}
 `;
 
 /** materials whose env reflection is raised while it rains (see main.js) */
@@ -39,16 +71,17 @@ function inject(shader, vertexVars, vertexMain, fragGlobals, patches) {
   shader.fragmentShader = f;
 }
 
-/** PLATEAU building walls: window grid + frames + soiling from the baked wall UV (m along the wall, m above the base) and the alpha code. */
-export function patchBuildingWall(mat, detail) {
-  mat.customProgramCacheKey = () => `bwall${detail}`;
+/** PLATEAU building walls: window grid + frames + soiling from the baked wall UV (m along the wall, m above the base) and the alpha code.
+ *  `bump` (ultra preset only) adds mortar/frame normal perturbation, roughness micro-variation and a single-sample window parallax. */
+export function patchBuildingWall(mat, detail, bump) {
+  mat.customProgramCacheKey = () => `bwall${detail}${bump ? 'b' : ''}`;
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uNight = U.uNight;
     inject(
       shader,
       'varying vec2 vWUv; varying vec3 vWPos;',
       'vWUv = uv; vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;',
-      'uniform float uNight; varying vec2 vWUv; varying vec3 vWPos; float gGlass = 0.0; float gLit = 0.0;',
+      'uniform float uNight; varying vec2 vWUv; varying vec3 vWPos; float gGlass = 0.0; float gLit = 0.0; float gFrame = 0.0;',
       [
         [
           '#include <color_fragment>',
@@ -60,7 +93,12 @@ export function patchBuildingWall(mat, detail) {
               float wsd = clamp((code - (0.10 + 0.30 * kind)) / 0.28, 0.0, 1.0);
               float storey = kind == 1.0 ? 3.0 : 2.9;
               float sp = 1.8 + wsd * 0.9 + (kind == 1.0 ? 0.8 : 0.0);
-              vec2 cell = vec2((vWUv.x + wsd * 6.0) / sp, vWUv.y / storey);
+              ${
+                bump
+                  ? 'vec2 wpar = fxParallax(vWPos, vWUv, normalize(cameraPosition - vWPos), 0.05);'
+                  : 'vec2 wpar = vec2(0.0);'
+              }
+              vec2 cell = vec2((vWUv.x + wpar.x + wsd * 6.0) / sp, (vWUv.y + wpar.y) / storey);
               vec2 f = fract(cell);
               vec2 id = floor(cell);
               float mort = 0.30 - (kind == 1.0 ? 0.04 : 0.0) + (wsd > 0.82 ? 0.42 : 0.0);
@@ -73,13 +111,25 @@ export function patchBuildingWall(mat, detail) {
               diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.80, 0.80, 0.78), frame * 0.9);
               diffuseColor.rgb = mix(diffuseColor.rgb, glass, win);
               gGlass = win;
+              gFrame = frame;
               gLit = step(fxHash(id + vec2(wsd * 17.0, kind * 3.0)), 0.36) * uNight * win;
             } else {
               ${detail > 0 ? 'diffuseColor.rgb *= 0.93 + 0.14 * fxNoise(vWPos.xz * 1.7 + vWPos.y * 0.4);' : ''}
             }
           }`,
         ],
-        ['#include <roughnessmap_fragment>', 'roughnessFactor = mix(roughnessFactor, 0.09, gGlass);'],
+        ...(bump
+          ? [
+              [
+                '#include <normal_fragment_maps>',
+                'normal = fxBump(normal, vWPos, fxNoise2(vWUv * vec2(9.0, 6.0)) * (1.0 - gGlass) + gFrame * 0.6, 0.30);',
+              ],
+              ['#include <roughnessmap_fragment>', 'roughnessFactor = clamp(roughnessFactor + (fxRoughNoise(vWPos, 3.2) - 0.5) * 0.18 * (1.0 - gGlass), 0.045, 1.0);'],
+            ]
+          : []),
+        // C6.1: rain makes the glass mirror-glossy too (the same envMapIntensity-boost trick `wetMats` uses for the
+        // road/deck can't target glass alone since it's a material-wide scalar; this does it per-pixel instead)
+        ['#include <roughnessmap_fragment>', 'roughnessFactor = mix(roughnessFactor, 0.09 - 0.055 * uWet, gGlass);'],
         ['#include <metalnessmap_fragment>', 'metalnessFactor = mix(metalnessFactor, 0.35, gGlass);'],
         ['#include <emissivemap_fragment>', 'totalEmissiveRadiance += vec3(1.0, 0.72, 0.38) * gLit * 1.7;'],
       ],
@@ -88,9 +138,10 @@ export function patchBuildingWall(mat, detail) {
   mat.needsUpdate = true;
 }
 
-/** terrain: large-scale patchiness + fine grain in the vertex colour (removes the faceted, flat look of the slopes) */
-export function patchTerrain(mat, detail) {
-  mat.customProgramCacheKey = () => `terrain${detail}`;
+/** terrain: large-scale patchiness + fine grain in the vertex colour (removes the faceted, flat look of the slopes).
+ *  `bump` (ultra preset only) adds normal perturbation + roughness micro-variation from the same noise field. */
+export function patchTerrain(mat, detail, bump) {
+  mat.customProgramCacheKey = () => `terrain${detail}${bump ? 'b' : ''}`;
   mat.onBeforeCompile = (shader) => {
     inject(
       shader,
@@ -119,15 +170,22 @@ export function patchTerrain(mat, detail) {
           '#include <color_fragment>',
           'diffuseColor.rgb *= 1.0 - uCloudSh * 0.30 * smoothstep(0.50, 0.72, fxNoise(vWPos.xz * 0.013 + vec2(uTime * 0.035, uTime * 0.014)));',
         ],
+        ...(bump
+          ? [
+              ['#include <normal_fragment_maps>', 'normal = fxBump(normal, vWPos, fxNoise2(vWPos.xz * 2.6) + fxNoise2(vWPos.xz * 11.0) * 0.4, 0.55);'],
+              ['#include <roughnessmap_fragment>', 'roughnessFactor = clamp(roughnessFactor + (fxRoughNoise(vWPos, 4.5) - 0.5) * 0.22, 0.15, 1.0);'],
+            ]
+          : []),
       ],
     );
   };
   mat.needsUpdate = true;
 }
 
-/** road surface: blotchy wear + fine aggregate */
-export function patchAsphalt(mat, detail) {
-  mat.customProgramCacheKey = () => `asphalt${detail}`;
+/** road surface: blotchy wear + fine aggregate. `bump` (ultra preset only) adds crack-driven normal
+ *  perturbation and roughness micro-variation, faded out on wet/puddled patches so the rain look is untouched. */
+export function patchAsphalt(mat, detail, bump) {
+  mat.customProgramCacheKey = () => `asphalt${detail}${bump ? 'b' : ''}`;
   wetMats.add(mat);
   mat.onBeforeCompile = (shader) => {
     inject(shader, 'varying vec3 vWPos;', 'vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;', 'varying vec3 vWPos; float gWet = 0.0;', [
@@ -151,15 +209,22 @@ export function patchAsphalt(mat, detail) {
           diffuseColor.rgb *= 1.0 - 0.34 * gWet;
         }`,
       ],
+      ...(bump
+        ? [
+            ['#include <normal_fragment_maps>', 'normal = fxBump(normal, vWPos, fxNoise2(vWPos.xz * 6.0) + fxNoise2(vWPos.xz * 1.2 + 5.0) * 0.5, 0.28 * (1.0 - gWet));'],
+            ['#include <roughnessmap_fragment>', 'roughnessFactor = clamp(roughnessFactor + (fxRoughNoise(vWPos, 8.0) - 0.5) * 0.16 * (1.0 - gWet), 0.06, 1.0);'],
+          ]
+        : []),
       ['#include <roughnessmap_fragment>', 'roughnessFactor = mix(roughnessFactor, 0.045, gWet);'],
     ]);
   };
   mat.needsUpdate = true;
 }
 
-/** platform deck / wooden posts / tactile strip: grime, worn yellow paint, dirty column bases, wet patches (all confined to the deck's world box) */
-export function patchDeck(mat, kind) {
-  mat.customProgramCacheKey = () => `deck-${kind}`;
+/** platform deck / wooden posts / tactile strip: grime, worn yellow paint, dirty column bases, wet patches (all confined to the deck's world box).
+ *  `bump` (ultra preset only) adds plank/grain normal perturbation on top, faded out on wet patches. */
+export function patchDeck(mat, kind, bump) {
+  mat.customProgramCacheKey = () => `deck-${kind}${bump ? 'b' : ''}`;
   if (kind === 'top') wetMats.add(mat);
   const body = {
     top: `float n = fxNoise(vec2(vWPos.x * 0.7, vWPos.z * 4.0));
@@ -175,6 +240,7 @@ export function patchDeck(mat, kind) {
       float n = fxNoise(vWPos.xz * 3.0 + vWPos.y * 2.0);
       diffuseColor.rgb *= 1.0 - low * (0.18 + 0.22 * n);`,
   }[kind];
+  const bumpFreq = { top: 'vec2(0.9, 5.0)', yellow: 'vec2(1.6, 9.0)', wood: 'vec2(2.2, 6.0)' }[kind];
   mat.onBeforeCompile = (shader) => {
     inject(shader, 'varying vec3 vWPos;', 'vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;', 'varying vec3 vWPos; float gWet = 0.0;', [
       [
@@ -183,6 +249,17 @@ export function patchDeck(mat, kind) {
       ${body}
     }`,
       ],
+      ...(bump
+        ? [
+            [
+              '#include <normal_fragment_maps>',
+              `if (vWPos.x > -56.0 && vWPos.x < -9.0 && vWPos.z < -1.3 && vWPos.z > -4.6 && vWPos.y > 0.9) {
+                normal = fxBump(normal, vWPos, fxNoise2(vWPos.xz * ${bumpFreq}), 0.22 * (1.0 - gWet));
+              }`,
+            ],
+            ['#include <roughnessmap_fragment>', 'roughnessFactor = clamp(roughnessFactor + (fxRoughNoise(vWPos, 5.0) - 0.5) * 0.14 * (1.0 - gWet), 0.08, 1.0);'],
+          ]
+        : []),
       ['#include <roughnessmap_fragment>', 'roughnessFactor = mix(roughnessFactor, 0.05, gWet);'],
     ]);
   };
