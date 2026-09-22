@@ -78,12 +78,12 @@ export function styleWorld(root, preset) {
     o.receiveShadow = true;
     const mats = Array.isArray(o.material) ? o.material : [o.material];
     for (const m of mats) {
-      if (m.name === 'W_MAT_Building_Wall#w') patchBuildingWall(m, preset.detail);
-      else if (m.name === 'W_MAT_Terrain#w') patchTerrain(m, preset.detail);
-      else if (m.name === 'W_MAT_Asphalt_Real' || m.name === 'W_MAT_Asphalt_Patch') patchAsphalt(m, preset.detail);
-      else if (m.name === 'W_MAT_Platform_Top') patchDeck(m, 'top');
-      else if (m.name === 'W_MAT_Tactile_Yellow') patchDeck(m, 'yellow');
-      else if (m.name === 'W_MAT_Wood_Post' || m.name === 'W_MAT_Wood_Dark') patchDeck(m, 'wood');
+      if (m.name === 'W_MAT_Building_Wall#w') patchBuildingWall(m, preset.detail, preset.bump);
+      else if (m.name === 'W_MAT_Terrain#w') patchTerrain(m, preset.detail, preset.bump);
+      else if (m.name === 'W_MAT_Asphalt_Real' || m.name === 'W_MAT_Asphalt_Patch') patchAsphalt(m, preset.detail, preset.bump);
+      else if (m.name === 'W_MAT_Platform_Top') patchDeck(m, 'top', preset.bump);
+      else if (m.name === 'W_MAT_Tactile_Yellow') patchDeck(m, 'yellow', preset.bump);
+      else if (m.name === 'W_MAT_Wood_Post' || m.name === 'W_MAT_Wood_Dark') patchDeck(m, 'wood', preset.bump);
     }
   });
 }
