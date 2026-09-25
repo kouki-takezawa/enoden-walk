@@ -123,7 +123,7 @@ export function styleCharacter(model, preset) {
     if (!o.isMesh && !o.isSkinnedMesh) return;
     const mats = Array.isArray(o.material) ? o.material : [o.material];
     for (const m of mats) {
-      if (m.name === 'W_MAT_Skin_Body' || m.name === 'W_MAT_Skin_Head' || m.name === 'W_MAT_Skin_Head_lips') patchSkin(m, preset.detail, preset.bump);
+      if (m.name === 'W_MAT_Skin_Body' || m.name === 'W_MAT_Skin_Head' || m.name === 'W_MAT_Skin_Head_lips' || m.name === 'W_Woody_Head' || m.name === 'W_Woody_Skin') patchSkin(m, preset.detail, preset.bump);
       else if (m.name === 'W_MAT_Hair') patchHair(m, preset.detail);
       else if (m.name === 'W_MAT_Tee' || m.name === 'W_MAT_TeeRib' || m.name === 'W_MAT_Chino') patchFabric(m, preset.detail, preset.bump);
     }

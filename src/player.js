@@ -47,7 +47,7 @@ export class Player {
     this.mixer = new THREE.AnimationMixer(this.model);
     this.act = {};
     for (const clip of gltf.animations) {
-      const key = clip.name.replace('Male_', '').toLowerCase();
+      const key = clip.name.replace(/^(Male|Woody)_/, '').toLowerCase();
       const a = this.mixer.clipAction(clip);
       a.play();
       a.paused = true;

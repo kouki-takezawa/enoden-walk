@@ -159,7 +159,7 @@ const trainLookPos = new THREE.Vector3();
 // decoded sizes in bytes: progress is measured against them because the server compresses (content-length is the encoded size)
 const SIZES = {
   meta: 2393, ground: 492984, surface: 123246, solid: 123246, trees: 103893, world: 4100056, train: 303360,
-  character: 852648, cars: 201536, ped0: 4961024, ped1: 4926104,
+  character: 1429804, cars: 201536, ped0: 4961024, ped1: 4926104,
 };
 const PED_FILES = ['ped0', 'ped1'];
 const TOTAL = Object.values(SIZES).reduce((a, b) => a + b, 0);

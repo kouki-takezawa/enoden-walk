@@ -86,9 +86,12 @@ URL パラメータ（動作確認用）: `?q=low|medium|high`（品質）、`?t
 ```bash
 # 1) 風景・電車（PLATEAU/OSM のデータは blender/plateau_data/kamakura_koko.json に焼き済み）
 blender -b --python blender/enoden_kamakurakokomae.py -- --no-character --no-blend --render none --web-export public/models
-# 2) 人物（ウェブ用: サブディバイドを適用・平色マテリアル・5 アニメ。--save は付けない）
-blender -b --python blender/character_male20s.py -- --stage anim --web-glb public/models/character.glb --no-verify --samples 8 --out /tmp/char
+# 2) 操作する人物 = ウッディ（ウェブ用: モディファイア適用・色をテクスチャにベイク・5 アニメ。約 30 秒）
+blender -b --python blender/woody.py -- --stage anim --no-verify --web-glb public/models/character.glb --out /tmp/woody
+#    （以前の 20 代男性に戻す場合: blender/character_male20s.py -- --stage anim --web-glb public/models/character.glb --no-verify --samples 8 --out /tmp/char）
 ```
+
+`blender/woody.py`（+ `woody_parts.py` / `woody_mat.py`）はトイ・ストーリーのウッディを手続き生成する個人用のファンメイドです（リグと歩行・走行は `char_*.py` を流用）。ウッディ / Toy Story © Disney / Pixar。
 
 `blender/fetch_plateau.py` は PLATEAU（CityGML）と OSM から `kamakura_koko.json` を作り直すスクリプトです。
 `blender/enoden_kamakurakokomae.py` は元の高精細レンダー用のシーン生成スクリプト（`--render both` で 1920×1080 の静止画）です。
